@@ -47,7 +47,8 @@ export class OpenRouterService {
     for (let attempt = 1; attempt <= attempts; attempt++) {
       try {
         const body: Record<string, unknown> = { model: this.model, messages };
-        if (jsonMode) body.response_format = { type: 'json_object' };
+        const supportsJsonMode = !this.model.startsWith('perplexity/');
+        if (jsonMode && supportsJsonMode) body.response_format = { type: 'json_object' };
 
         const response = await axios.post(
           `${this.baseUrl}/chat/completions`,
