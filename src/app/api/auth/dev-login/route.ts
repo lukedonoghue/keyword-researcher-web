@@ -4,8 +4,14 @@ import { getSession } from '@/lib/auth/session';
 
 export async function GET(request: NextRequest) {
   const secret = request.nextUrl.searchParams.get('secret');
-  if (secret !== process.env.GOOGLE_ADS_DEVELOPER_TOKEN) {
-    return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  const devToken = process.env.GOOGLE_ADS_DEVELOPER_TOKEN;
+  if (!devToken || secret !== devToken) {
+    return NextResponse.json({
+      error: 'unauthorized',
+      hasDevToken: Boolean(devToken),
+      secretLength: secret?.length ?? 0,
+      devTokenLength: devToken?.length ?? 0,
+    }, { status: 401 });
   }
 
   const refreshToken = process.env.GOOGLE_ADS_REFRESH_TOKEN;
