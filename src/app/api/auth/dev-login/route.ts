@@ -1,17 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { refreshAccessToken } from '@/lib/auth/google-oauth';
 import { getSession } from '@/lib/auth/session';
 
 export async function GET(request: NextRequest) {
   const secret = request.nextUrl.searchParams.get('secret');
   const devToken = process.env.GOOGLE_ADS_DEVELOPER_TOKEN;
   if (!devToken || secret !== devToken) {
-    return NextResponse.json({
-      error: 'unauthorized',
-      hasDevToken: Boolean(devToken),
-      secretLength: secret?.length ?? 0,
-      devTokenLength: devToken?.length ?? 0,
-    }, { status: 401 });
+    return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   }
 
   const refreshToken = process.env.GOOGLE_ADS_REFRESH_TOKEN;
@@ -20,7 +14,27 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const tokens = await refreshAccessToken(refreshToken);
+    // Use the original OAuth client that issued the refresh token
+    const origClientId = process.env.GOOGLE_ADS_ORIG_CLIENT_ID || process.env.GOOGLE_ADS_CLIENT_ID!;
+    const origClientSecret = process.env.GOOGLE_ADS_ORIG_CLIENT_SECRET || process.env.GOOGLE_ADS_CLIENT_SECRET!;
+
+    const response = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        refresh_token: refreshToken,
+        client_id: origClientId,
+        client_secret: origClientSecret,
+        grant_type: 'refresh_token',
+      }),
+    });
+
+    if (!response.ok) {
+      const err = await response.text();
+      throw new Error(`Token refresh failed: ${err}`);
+    }
+
+    const tokens = await response.json();
     const session = await getSession();
     session.accessToken = tokens.access_token;
     session.refreshToken = refreshToken;
