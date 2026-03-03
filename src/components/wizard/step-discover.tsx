@@ -32,14 +32,25 @@ export function StepDiscover() {
   );
 
   const defaultSelectionNames = useMemo(
-    () => (state.selectedServices.length > 0 ? state.selectedServices : discoveredNames),
-    [discoveredNames, state.selectedServices]
+    () => (state.selectedServices.length > 0 ? state.selectedServices : []),
+    [state.selectedServices]
   );
 
   const effectiveSelection = useMemo(() => {
     if (hasCustomSelection) return selectedNames;
     return new Set(defaultSelectionNames);
   }, [defaultSelectionNames, hasCustomSelection, selectedNames]);
+
+  const allSelected = effectiveSelection.size === discoveredNames.length && discoveredNames.length > 0;
+
+  const toggleAll = useCallback(() => {
+    if (allSelected) {
+      setSelectedNames(new Set());
+    } else {
+      setSelectedNames(new Set(discoveredNames));
+    }
+    setHasCustomSelection(true);
+  }, [allSelected, discoveredNames]);
 
   const runDiscovery = useCallback(async () => {
     await discoverServices(state.targetUrl);
@@ -165,6 +176,15 @@ export function StepDiscover() {
               )}
             </div>
           )}
+
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-muted-foreground">
+              {effectiveSelection.size} of {discoveredNames.length} selected
+            </span>
+            <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={toggleAll}>
+              {allSelected ? 'Deselect All' : 'Select All'}
+            </Button>
+          </div>
 
           <div className="space-y-2">
             {state.discoveredServices.map((service) => (
