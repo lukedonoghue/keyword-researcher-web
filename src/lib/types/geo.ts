@@ -30,3 +30,12 @@ export type GeoConstant = {
   currencyCodes: string[];
   currencySymbols: string[];
 };
+
+export type GeoLocationSuggestion = {
+  id: string;
+  name: string;
+  canonicalName: string;
+  targetType: string;
+  countryCode: string;
+  reach: number;
+};

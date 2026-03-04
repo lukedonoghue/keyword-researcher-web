@@ -105,6 +105,17 @@ export class OpenRouterService {
       raw = raw.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
     }
 
+    // Extract JSON object using brace-matching (handles trailing citations/text from Perplexity)
+    const start = raw.indexOf('{');
+    if (start !== -1) {
+      let depth = 0;
+      for (let i = start; i < raw.length; i++) {
+        if (raw[i] === '{') depth++;
+        else if (raw[i] === '}') depth--;
+        if (depth === 0) { raw = raw.substring(start, i + 1); break; }
+      }
+    }
+
     const parsed = JSON.parse(raw) as T;
     return { data: parsed, usage: result.usage };
   }

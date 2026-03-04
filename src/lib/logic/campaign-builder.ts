@@ -1,3 +1,6 @@
+import type { CampaignStructureV2, AdGroup, SubTheme, SubThemeKeyword } from '../types/index';
+import { normalizeKeywordText } from './keyword-signals';
+
 interface KeywordMetric {
   text: string;
   volume: number;
@@ -12,32 +15,12 @@ interface KeywordMetric {
   intent?: 'informational' | 'commercial' | 'transactional' | 'navigational' | 'unknown';
 }
 
-interface AdGroupItem {
-  keyword: string;
-  matchType: 'Exact' | 'Phrase';
-  volume: number;
-  cpc: number;
-  cpcLow?: number;
-  cpcHigh?: number;
-  competitionIndex?: number;
-  qualityScore?: number;
-  qualityRating?: string;
-}
-
 interface NegativeKeywordItem {
   campaign: string;
   adGroup: string;
   keyword: string;
-  matchType: 'Phrase';
+  matchType: 'Phrase' | 'Exact';
   status: 'Negative';
-}
-
-interface CampaignStructure {
-  campaignName: string;
-  landingPage?: string;
-  adGroups: {
-    [adGroupName: string]: AdGroupItem[];
-  };
 }
 
 type ServiceInput = string | { name: string; landingPage?: string };
@@ -63,6 +46,7 @@ type ThemeBucket = {
 export interface CampaignBuildOptions {
   minAdGroupKeywords?: number;
   maxAdGroupKeywords?: number;
+  targetDomain?: string;
 }
 
 type AdGroupLimits = {
@@ -70,16 +54,55 @@ type AdGroupLimits = {
   max: number;
 };
 
+function slugify(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, '')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .trim();
+}
+
+const negativeSignalTerms = [
+  'login', 'log in', 'signin', 'sign in', 'forgot', 'password', 'account',
+  'support', 'help desk', 'faq', 'privacy', 'policy', 'terms', 'contact us',
+  'cookie', 'tos', 'sitemap', 'careers', 'career', 'job', 'jobs',
+  'complaint', 'disclaimer', 'newsletter', 'subscription', 'unsubscribe',
+  'used', 'second hand', 'secondhand', 'diy', 'do it yourself',
+  'free', 'salary', 'salaries', 'internship', 'volunteer',
+  'wiki', 'wikipedia', 'reddit', 'youtube', 'forum',
+];
+
+function hasNegativeSignal(text: string, competitorNames: string[] = []): boolean {
+  const normalized = normalizeKeywordText(text);
+  if (!normalized) return false;
+
+  // Check for navigational / non-commercial terms
+  for (const term of negativeSignalTerms) {
+    const pattern = new RegExp(`\\b${term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+    if (pattern.test(normalized)) return true;
+  }
+
+  // Check for competitor brand names
+  for (const name of competitorNames) {
+    const normalizedName = normalizeKeywordText(name);
+    if (!normalizedName) continue;
+    const pattern = new RegExp(`\\b${normalizedName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+    if (pattern.test(normalized)) return true;
+  }
+
+  return false;
+}
+
 export class CampaignBuilder {
   private static readonly DEFAULT_MIN_AD_GROUP_KEYWORDS = 3;
-  private static readonly DEFAULT_MAX_AD_GROUP_KEYWORDS = 10;
-  private static readonly CATCH_ALL_PREFIX = 'Catchall - General';
+  private static readonly DEFAULT_MAX_AD_GROUP_KEYWORDS = 20;
 
   static build(
     services: ServiceInput[],
     keywordMetrics: KeywordMetric[],
     options: CampaignBuildOptions = {},
-  ): CampaignStructure[] {
+  ): CampaignStructureV2[] {
     const normalizedServices = this.normalizeServiceProfiles(services);
     if (normalizedServices.length === 0) return [];
 
@@ -102,63 +125,158 @@ export class CampaignBuilder {
       keywordsByService.set(match.service, existing);
     }
 
-    const campaigns: CampaignStructure[] = [];
+    const campaigns: CampaignStructureV2[] = [];
+    const usedLandingPages = new Set<string>();
+
     for (const profile of serviceProfiles) {
       const campaignKeywords = keywordsByService.get(profile.name) || [];
-      const adGroups = this.buildAdGroupsForCampaign(profile, campaignKeywords, limits);
-      if (Object.keys(adGroups).length === 0) continue;
+      const adGroups = this.buildAdGroupsV2(profile, campaignKeywords, limits);
+      if (adGroups.length === 0) continue;
+
+      // A8: Landing page fallback — construct if missing or duplicate
+      let landingPage = profile.landingPage;
+      if (!landingPage || usedLandingPages.has(landingPage)) {
+        const domain = options.targetDomain || '';
+        if (domain) {
+          landingPage = `https://${domain}/${slugify(profile.name)}/`;
+        }
+      }
+      if (landingPage) usedLandingPages.add(landingPage);
 
       campaigns.push({
         campaignName: `Service - ${profile.name}`,
-        landingPage: profile.landingPage,
+        campaignTheme: `${profile.name} Services`,
+        landingPage,
+        bidStrategy: 'Maximize conversions',
         adGroups,
       });
     }
 
-    if (unmatchedKeywords.length === 0) {
-      return campaigns;
-    }
-
-    if (campaigns.length > 0) {
+    // Distribute unmatched keywords to the primary campaign
+    if (unmatchedKeywords.length > 0 && campaigns.length > 0) {
       const primary = campaigns[0];
       const primaryProfile = serviceProfiles[0];
-      const existing = this.normalizeKeywordsFromAdGroups(primary.adGroups);
-      primary.adGroups = this.buildAdGroupsForCampaign(
-        primaryProfile,
-        this.dedupeKeywords([...existing, ...unmatchedKeywords]),
-        limits,
-      );
-      return campaigns;
+      const existingKws = this.extractKeywordsFromAdGroups(primary.adGroups);
+      const combined = this.dedupeKeywords([...existingKws, ...unmatchedKeywords]);
+      primary.adGroups = this.buildAdGroupsV2(primaryProfile, combined, limits);
+    } else if (unmatchedKeywords.length > 0 && campaigns.length === 0) {
+      const [fallbackProfile] = serviceProfiles;
+      const adGroups = this.buildAdGroupsV2(fallbackProfile, unmatchedKeywords, limits);
+      if (adGroups.length > 0) {
+        campaigns.push({
+          campaignName: `Service - ${fallbackProfile.name}`,
+          campaignTheme: `${fallbackProfile.name} Services`,
+          landingPage: fallbackProfile.landingPage,
+          bidStrategy: 'Maximize conversions',
+          adGroups,
+        });
+      }
     }
 
-    const [fallbackProfile] = serviceProfiles;
-    const adGroups = this.buildAdGroupsForCampaign(fallbackProfile, unmatchedKeywords, limits);
-    if (Object.keys(adGroups).length === 0) return [];
+    return this.assignPriority(campaigns);
+  }
 
-    campaigns.push({
-      campaignName: `Service - ${fallbackProfile.name}`,
-      landingPage: fallbackProfile.landingPage,
-      adGroups,
+  static assignPriority(campaigns: CampaignStructureV2[]): CampaignStructureV2[] {
+    if (campaigns.length === 0) return campaigns;
+
+    // Compute per-campaign metrics
+    const campaignMetrics = campaigns.map((campaign) => {
+      const intentCounts = { transactional: 0, commercial: 0, informational: 0, navigational: 0, unknown: 0 };
+      const seen = new Set<string>();
+      let cpcSum = 0;
+      let volumeSum = 0;
+      let kwCount = 0;
+
+      for (const ag of campaign.adGroups) {
+        for (const st of ag.subThemes) {
+          for (const kw of st.keywords) {
+            const key = kw.keyword.toLowerCase().trim();
+            if (seen.has(key)) continue;
+            seen.add(key);
+            // Count by intent — infer from sub-theme name if no direct field
+            const intent = this.inferIntentFromSubTheme(st.name);
+            intentCounts[intent]++;
+            cpcSum += kw.cpc;
+            volumeSum += kw.volume;
+            kwCount++;
+          }
+        }
+      }
+
+      const avgCpc = kwCount > 0 ? cpcSum / kwCount : 0;
+      return { campaign, intentCounts, avgCpc, totalVolume: volumeSum, kwCount };
     });
+
+    const maxAvgCpc = Math.max(...campaignMetrics.map((m) => m.avgCpc), 0.01);
+
+    for (const m of campaignMetrics) {
+      const total = m.kwCount || 1;
+      // Intent score: transactional×3 + commercial×2 + informational×0.5 + navigational×0
+      const rawIntentScore =
+        (m.intentCounts.transactional * 3 +
+          m.intentCounts.commercial * 2 +
+          m.intentCounts.informational * 0.5 +
+          m.intentCounts.navigational * 0) /
+        total;
+      // Normalize to 0-100 (max possible raw = 3)
+      const intentScore = Math.min((rawIntentScore / 3) * 100, 100);
+      const valueScore = (m.avgCpc / maxAvgCpc) * 100;
+      const priorityScore = Math.round(intentScore * 0.7 + valueScore * 0.3);
+
+      let priority: 'high' | 'medium' | 'low';
+      let recommendedBidStrategy: string;
+      if (priorityScore >= 60) {
+        priority = 'high';
+        recommendedBidStrategy = 'Maximize conversions';
+      } else if (priorityScore >= 30) {
+        priority = 'medium';
+        recommendedBidStrategy = 'Maximize conversions (target CPA if budget-constrained)';
+      } else {
+        priority = 'low';
+        recommendedBidStrategy = 'Maximize clicks';
+      }
+
+      m.campaign.priority = priority;
+      m.campaign.priorityScore = priorityScore;
+      m.campaign.intentBreakdown = m.intentCounts;
+      m.campaign.avgCpc = m.avgCpc;
+      m.campaign.totalVolume = m.totalVolume;
+      m.campaign.recommendedBidStrategy = recommendedBidStrategy;
+    }
+
+    // Sort by priorityScore descending
+    campaigns.sort((a, b) => (b.priorityScore ?? 0) - (a.priorityScore ?? 0));
     return campaigns;
   }
 
-  private static buildAdGroupsForCampaign(
+  private static inferIntentFromSubTheme(subThemeName: string): 'transactional' | 'commercial' | 'informational' | 'navigational' | 'unknown' {
+    const name = subThemeName.toLowerCase();
+    if (name.includes('service') || name.includes('core')) return 'transactional';
+    if (name.includes('research') || name.includes('comparison')) return 'commercial';
+    if (name.includes('information') || name.includes('info')) return 'informational';
+    if (name.includes('brand') || name.includes('navigation')) return 'navigational';
+    return 'unknown';
+  }
+
+  private static buildAdGroupsV2(
     serviceProfile: ServiceProfile,
     campaignKeywords: KeywordMetric[],
     limits: AdGroupLimits,
-  ): { [key: string]: AdGroupItem[] } {
-    const adGroups: { [key: string]: AdGroupItem[] } = {};
+  ): AdGroup[] {
     const sorted = this.sortKeywords([...campaignKeywords]);
-    if (sorted.length === 0) return adGroups;
+    if (sorted.length === 0) return [];
 
-    const catchAllSize = this.selectCatchAllSize(sorted.length, limits);
-    const catchAllKeywords = sorted.slice(0, catchAllSize);
-    const remaining = sorted.slice(catchAllSize);
+    // A7: For small keyword sets, use service name instead of "Catchall"
+    if (sorted.length <= limits.min * 2) {
+      const adGroupName = serviceProfile.name;
+      const subThemes = this.buildSubThemesForGroup(sorted);
+      return [{ name: adGroupName, subThemes }];
+    }
 
-    const themeBuckets = this.groupKeywordsByTheme(remaining, serviceProfile);
+    // Group by theme
+    const themeBuckets = this.groupKeywordsByTheme(sorted, serviceProfile);
+    const adGroups: AdGroup[] = [];
     const overflow: KeywordMetric[] = [];
-    const themedGroups: ThemeBucket[] = [];
 
     for (const [theme, keywords] of themeBuckets.entries()) {
       if (keywords.length < limits.min) {
@@ -172,82 +290,148 @@ export class CampaignBuilder {
         continue;
       }
 
-      chunks.forEach((chunk, index) => {
+      for (const [index, chunk] of chunks.entries()) {
         if (chunk.length < limits.min) {
           overflow.push(...chunk);
-          return;
+          continue;
         }
         const suffix = chunks.length > 1 ? ` (${index + 1})` : '';
-        themedGroups.push({
-          theme: `${this.toTitleCase(theme)} - Theme${suffix}`,
-          keywords: chunk,
-        });
-      });
+        const groupName = `${this.toTitleCase(theme)}${suffix}`;
+        const subThemes = this.buildSubThemesForGroup(chunk);
+        adGroups.push({ name: groupName, subThemes });
+      }
     }
 
-    const catchAll = [...catchAllKeywords];
-    this.moveKeywordsToCatchAll(catchAll, overflow, limits);
-
+    // Handle overflow keywords properly — never exceed limits.max per ad group
     if (overflow.length > 0) {
-      const overflowChunks = this.chunkKeywordsIntoGroups(overflow, limits);
-      if (overflowChunks.length > 0) {
-        for (const [index, chunk] of overflowChunks.entries()) {
-          if (chunk.length < limits.min) continue;
-          const suffix = overflowChunks.length > 1 ? ` (${index + 1})` : '';
-          themedGroups.push({
-            theme: `Additional - Theme${suffix}`,
-            keywords: chunk,
-          });
+      if (adGroups.length > 0) {
+        if (overflow.length >= limits.min) {
+          // Enough overflow for proper groups — chunk into "General (N)" groups
+          const chunks = this.chunkKeywordsIntoGroups(overflow, limits);
+          for (const [idx, chunk] of chunks.entries()) {
+            const suffix = chunks.length > 1 ? ` (${idx + 1})` : '';
+            const groupName = `General${suffix}`;
+            const subThemes = this.buildSubThemesForGroup(chunk);
+            adGroups.push({ name: groupName, subThemes });
+          }
+          // Any remainder too small for its own group — distribute round-robin
+          const totalChunked = chunks.reduce((s, c) => s + c.length, 0);
+          const remainder = overflow.slice(totalChunked);
+          this.distributeKeywordsRoundRobin(remainder, adGroups, limits);
+        } else {
+          // Too few for their own group — distribute one-at-a-time across existing groups
+          this.distributeKeywordsRoundRobin(overflow, adGroups, limits);
         }
       } else {
-        catchAll.push(...overflow);
+        // No themed groups at all — create groups from sorted keywords
+        const chunks = this.chunkKeywordsIntoGroups(sorted, limits);
+        if (chunks.length > 0) {
+          for (const [idx, chunk] of chunks.entries()) {
+            const suffix = chunks.length > 1 ? ` (${idx + 1})` : '';
+            const groupName = `${serviceProfile.name}${suffix}`;
+            const subThemes = this.buildSubThemesForGroup(chunk);
+            adGroups.push({ name: groupName, subThemes });
+          }
+        } else {
+          // Even chunking failed (too few) — single group
+          const subThemes = this.buildSubThemesForGroup(sorted);
+          adGroups.push({ name: serviceProfile.name, subThemes });
+        }
       }
     }
 
-    const dedupedCatchAll = this.dedupeKeywords(catchAll);
-    const catchAllGroups = dedupedCatchAll.length >= limits.min
-      ? this.chunkKeywordsIntoGroups(dedupedCatchAll, limits)
-      : [];
-    if (catchAllGroups.length > 0) {
-      for (const [index, chunk] of catchAllGroups.entries()) {
-        const key = `${CampaignBuilder.CATCH_ALL_PREFIX}${catchAllGroups.length > 1 ? ` (${index + 1})` : ''}`;
-        adGroups[key] = this.rowsForKeywords(chunk);
-      }
-    } else if (dedupedCatchAll.length > 0) {
-      adGroups[CampaignBuilder.CATCH_ALL_PREFIX] = this.rowsForKeywords(dedupedCatchAll);
-    }
-
-    for (const themedGroup of themedGroups) {
-      const key = themedGroup.theme;
-      const existing = adGroups[key];
-      if (!existing || existing.length === 0) {
-        adGroups[key] = this.rowsForKeywords(themedGroup.keywords);
-      }
-    }
-
-    if (Object.keys(adGroups).length === 0) {
-      adGroups[CampaignBuilder.CATCH_ALL_PREFIX] = this.rowsForKeywords(sorted);
-      return adGroups;
-    }
-
-    return adGroups;
+    // Ensure no empty ad groups
+    return adGroups.filter((ag) => ag.subThemes.some((st) => st.keywords.length > 0));
   }
 
-  private static normalizeKeywordsFromAdGroups(adGroups: CampaignStructure['adGroups']): KeywordMetric[] {
+  private static buildSubThemesForGroup(keywords: KeywordMetric[]): SubTheme[] {
+    // Sub-cluster by match type: Exact vs Phrase
+    const matchTypes: ('Exact' | 'Phrase')[] = ['Exact', 'Phrase'];
+    const subThemes: SubTheme[] = [];
+
+    // Also try semantic sub-clustering if there are enough keywords
+    if (keywords.length >= 6) {
+      // Group by intent for semantic sub-themes
+      const intentGroups = new Map<string, KeywordMetric[]>();
+      for (const kw of keywords) {
+        const intent = kw.intent || 'general';
+        const group = intentGroups.get(intent) ?? [];
+        group.push(kw);
+        intentGroups.set(intent, group);
+      }
+
+      // If we get meaningful intent groups, use them
+      if (intentGroups.size > 1) {
+        const intentLabels: Record<string, string> = {
+          transactional: 'Service Queries',
+          commercial: 'Research & Comparison',
+          informational: 'Information',
+          general: 'General',
+          unknown: 'General',
+          navigational: 'Brand & Navigation',
+        };
+
+        for (const [intent, kws] of intentGroups.entries()) {
+          const label = intentLabels[intent] || this.toTitleCase(intent);
+          const kwRows: SubThemeKeyword[] = kws.flatMap((kw) =>
+            matchTypes.map((mt) => ({
+              keyword: kw.text,
+              matchType: mt,
+              volume: kw.volume,
+              cpc: kw.cpc,
+              cpcLow: kw.cpcLow,
+              cpcHigh: kw.cpcHigh,
+              competitionIndex: kw.competitionIndex,
+              qualityScore: kw.qualityScore,
+              qualityRating: kw.qualityRating,
+              intent: kw.intent,
+            }))
+          );
+          subThemes.push({ name: label, keywords: kwRows });
+        }
+        return subThemes;
+      }
+    }
+
+    // Default: single sub-theme with all keywords in both match types
+    const allRows: SubThemeKeyword[] = keywords.flatMap((kw) =>
+      matchTypes.map((mt) => ({
+        keyword: kw.text,
+        matchType: mt,
+        volume: kw.volume,
+        cpc: kw.cpc,
+        cpcLow: kw.cpcLow,
+        cpcHigh: kw.cpcHigh,
+        competitionIndex: kw.competitionIndex,
+        qualityScore: kw.qualityScore,
+        qualityRating: kw.qualityRating,
+        intent: kw.intent,
+      }))
+    );
+    subThemes.push({ name: 'Core Keywords', keywords: allRows });
+    return subThemes;
+  }
+
+  private static extractKeywordsFromAdGroups(adGroups: AdGroup[]): KeywordMetric[] {
     const seen = new Set<string>();
     const out: KeywordMetric[] = [];
-    for (const groupKeywords of Object.values(adGroups)) {
-      for (const keyword of groupKeywords) {
-        const key = keyword.keyword.toLowerCase().trim();
-        if (!key || seen.has(key)) continue;
-        seen.add(key);
-        out.push({
-          text: keyword.keyword,
-          volume: keyword.volume,
-          cpc: keyword.cpc,
-          qualityScore: keyword.qualityScore,
-          qualityRating: keyword.qualityRating,
-        });
+    for (const ag of adGroups) {
+      for (const st of ag.subThemes) {
+        for (const kw of st.keywords) {
+          const key = kw.keyword.toLowerCase().trim();
+          if (!key || seen.has(key)) continue;
+          seen.add(key);
+          out.push({
+            text: kw.keyword,
+            volume: kw.volume,
+            cpc: kw.cpc,
+            cpcLow: kw.cpcLow,
+            cpcHigh: kw.cpcHigh,
+            competitionIndex: kw.competitionIndex,
+            qualityScore: kw.qualityScore,
+            qualityRating: kw.qualityRating,
+          });
+        }
       }
     }
     return out;
@@ -265,19 +449,6 @@ export class CampaignBuilder {
     const max = Math.max(min, rawMax);
 
     return { min, max };
-  }
-
-  private static selectCatchAllSize(totalKeywords: number, limits: AdGroupLimits): number {
-    if (totalKeywords <= limits.min) return totalKeywords;
-    if (totalKeywords <= 25) return limits.min;
-    return limits.max;
-  }
-
-  private static moveKeywordsToCatchAll(catchAll: KeywordMetric[], overflow: KeywordMetric[], limits: AdGroupLimits) {
-    const spareCapacity = limits.max - catchAll.length;
-    if (spareCapacity <= 0) return;
-    const moved = overflow.splice(0, Math.min(spareCapacity, overflow.length));
-    catchAll.push(...moved);
   }
 
   private static chunkKeywordsIntoGroups(keywords: KeywordMetric[], limits: AdGroupLimits): KeywordMetric[][] {
@@ -305,21 +476,38 @@ export class CampaignBuilder {
     return chunks;
   }
 
-  private static rowsForKeywords(keywords: KeywordMetric[]): AdGroupItem[] {
-    const matchTypes = this.determineMatchTypes();
-    return keywords.flatMap((keyword) =>
-      matchTypes.map((matchType) => ({
-        keyword: keyword.text,
-        matchType,
-        volume: keyword.volume,
-        cpc: keyword.cpc,
-        cpcLow: keyword.cpcLow,
-        cpcHigh: keyword.cpcHigh,
-        competitionIndex: keyword.competitionIndex,
-        qualityScore: keyword.qualityScore,
-        qualityRating: keyword.qualityRating,
-      })),
-    );
+  private static countUniqueKeywords(adGroup: AdGroup): number {
+    const seen = new Set<string>();
+    for (const st of adGroup.subThemes) {
+      for (const kw of st.keywords) {
+        seen.add(kw.keyword.toLowerCase().trim());
+      }
+    }
+    return seen.size;
+  }
+
+  private static distributeKeywordsRoundRobin(
+    keywords: KeywordMetric[],
+    adGroups: AdGroup[],
+    limits: AdGroupLimits,
+  ): void {
+    if (keywords.length === 0 || adGroups.length === 0) return;
+    let groupIdx = 0;
+    for (const kw of keywords) {
+      // Find next group that hasn't hit max (try all groups once)
+      let placed = false;
+      for (let attempt = 0; attempt < adGroups.length; attempt++) {
+        const candidate = adGroups[(groupIdx + attempt) % adGroups.length]!;
+        if (this.countUniqueKeywords(candidate) < limits.max) {
+          const subThemes = this.buildSubThemesForGroup([kw]);
+          candidate.subThemes.push(...subThemes);
+          groupIdx = (groupIdx + attempt + 1) % adGroups.length;
+          placed = true;
+          break;
+        }
+      }
+      if (!placed) break; // All groups at max
+    }
   }
 
   private static groupKeywordsByTheme(keywords: KeywordMetric[], profile: ServiceProfile): Map<string, KeywordMetric[]> {
@@ -340,24 +528,54 @@ export class CampaignBuilder {
     return new Map(Array.from(buckets.entries()).sort(([a], [b]) => a.localeCompare(b)));
   }
 
-  private static extractThemeForKeyword(keyword: KeywordMetric, profile: ServiceProfile): string {
-    if (Array.isArray(keyword.themes) && keyword.themes.length > 0) {
-      const explicitTheme = keyword.themes
-        .map((theme) => theme.trim())
-        .find((theme) => theme && theme.toLowerCase() !== 'general');
+  private static readonly modifierThemes: Array<{ theme: string; patterns: RegExp[] }> = [
+    {
+      theme: 'Cost & Pricing',
+      patterns: [
+        /\b(cost|price|pricing|prices|quote|quotes|estimate|estimates|rates?|fees?|how much|cheap|cheapest|affordable|expensive|budget|worth)\b/i,
+      ],
+    },
+    {
+      theme: 'Near Me',
+      patterns: [
+        /\b(near me|near|nearby|local|in \w+|suburb|area)\b/i,
+        /\b\w+ (city|suburb|town|region|area)$/i,
+      ],
+    },
+    {
+      theme: 'Reviews & Comparison',
+      patterns: [
+        /\b(review|reviews|best|top rated|compare|comparison|vs|versus|alternative|alternatives|rated|rating|ratings|recommended)\b/i,
+      ],
+    },
+    {
+      theme: 'DIY & How To',
+      patterns: [
+        /\b(how to|diy|do it yourself|tutorial|guide|step by step|tips|ideas|yourself)\b/i,
+      ],
+    },
+  ];
 
-      if (explicitTheme) {
-        return explicitTheme;
+  private static extractThemeForKeyword(keyword: KeywordMetric, profile: ServiceProfile): string {
+    const normalized = this.normalizeText(keyword.text);
+
+    // Classify by modifier pattern — groups keywords by searcher intent within a campaign
+    for (const { theme, patterns } of this.modifierThemes) {
+      if (patterns.some((p) => p.test(normalized))) {
+        return theme;
       }
     }
 
-    const tokens = this.tokenize(this.normalizeText(keyword.text));
+    // Fallback: extract meaningful non-service, non-modifier tokens
+    const tokens = this.tokenize(normalized);
     if (tokens.length === 0) return 'General';
 
     const filtered = tokens.filter((token) => token && !this.isStopWord(token) && !profile.tokens.includes(token));
     if (filtered.length === 0) return 'General';
 
-    return filtered.slice(0, 2).join(' ');
+    // Only use token-based theme if the tokens are specific enough (not single generic words)
+    const candidate = filtered.slice(0, 2).join(' ');
+    return candidate;
   }
 
   private static normalizeServiceProfiles(services: ServiceInput[]): Array<{ name: string; landingPage?: string }> {
@@ -463,10 +681,6 @@ export class CampaignBuilder {
     };
   }
 
-  private static determineMatchTypes(): ('Exact' | 'Phrase')[] {
-    return ['Exact', 'Phrase'];
-  }
-
   private static compareKeywordPriority(a: KeywordMetric, b: KeywordMetric): number {
     if ((b.qualityScore ?? 0) !== (a.qualityScore ?? 0)) return (b.qualityScore ?? 0) - (a.qualityScore ?? 0);
     if (b.volume !== a.volume) return b.volume - a.volume;
@@ -544,22 +758,41 @@ export class CampaignBuilder {
     allKeywords: KeywordMetric[],
     selectedKeywords: KeywordMetric[],
     campaignName: string = 'Campaign',
+    competitorNames: string[] = [],
   ): NegativeKeywordItem[] {
     const selectedSet = new Set(selectedKeywords.map((k) => k.text.toLowerCase().trim()));
     const negatives: NegativeKeywordItem[] = [];
     const seen = new Set<string>();
 
-    for (const keyword of allKeywords) {
-      const key = keyword.text.toLowerCase().trim();
-      if (!key || selectedSet.has(key) || seen.has(key)) continue;
+    // 1. Add competitor brand names as negatives
+    for (const name of competitorNames) {
+      const key = name.toLowerCase().trim();
+      if (!key || seen.has(key)) continue;
       seen.add(key);
       negatives.push({
         campaign: campaignName,
         adGroup: '',
-        keyword: keyword.text,
+        keyword: name.trim(),
         matchType: 'Phrase',
         status: 'Negative',
       });
+    }
+
+    // 2. Only add keywords with genuine negative signals — not "everything we didn't pick"
+    for (const keyword of allKeywords) {
+      const key = keyword.text.toLowerCase().trim();
+      if (!key || selectedSet.has(key) || seen.has(key)) continue;
+
+      if (hasNegativeSignal(keyword.text, competitorNames)) {
+        seen.add(key);
+        negatives.push({
+          campaign: campaignName,
+          adGroup: '',
+          keyword: keyword.text,
+          matchType: 'Phrase',
+          status: 'Negative',
+        });
+      }
     }
 
     return negatives;

@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Badge } from '@/components/ui/badge';
+import { Wrench } from 'lucide-react';
 
 const BUSINESS_TYPE_LABELS: Record<string, string> = {
   local_service: 'Local Service',
@@ -96,7 +97,7 @@ export function StepDiscover() {
       <div>
         <h2 className="text-base font-semibold">Service Discovery</h2>
         <p className="text-xs text-muted-foreground mt-0.5">
-          AI is analyzing <span className="font-mono text-foreground">{state.targetDomain}</span> to identify services, business type, and service area.
+          Analyzing your website to identify the services you offer, your business type, and service area.
         </p>
       </div>
 
@@ -129,6 +130,14 @@ export function StepDiscover() {
 
       {state.discoveredServices.length > 0 && (
         <>
+          <Card className="border-green-200 bg-green-50 dark:border-green-800 dark:bg-green-950/40">
+            <CardContent className="py-3">
+              <p className="text-sm text-green-800 dark:text-green-300">
+                We found <span className="font-semibold">{state.discoveredServices.length}</span> service{state.discoveredServices.length !== 1 ? 's' : ''}{state.businessName ? <> for <span className="font-semibold">{state.businessName}</span></> : ''}. Select the ones you want to target with Google Ads.
+              </p>
+            </CardContent>
+          </Card>
+
           {state.businessName && (
             <div className="rounded border border-border p-3 space-y-1.5">
               <div className="flex items-center gap-2">
@@ -181,7 +190,7 @@ export function StepDiscover() {
             <span className="text-xs text-muted-foreground">
               {effectiveSelection.size} of {discoveredNames.length} selected
             </span>
-            <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={toggleAll}>
+            <Button variant="outline" size="sm" className="h-7 text-xs" onClick={toggleAll}>
               {allSelected ? 'Deselect All' : 'Select All'}
             </Button>
           </div>
@@ -196,7 +205,10 @@ export function StepDiscover() {
                 <CardContent className="flex items-start gap-3 py-3">
                   <Checkbox checked={effectiveSelection.has(service.name)} className="mt-0.5" />
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium">{service.name}</p>
+                    <p className="text-sm font-medium flex items-center gap-1.5">
+                      <Wrench className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                      {service.name}
+                    </p>
                     <p className="text-xs text-muted-foreground mt-0.5">{service.description}</p>
                     <div className="flex flex-wrap gap-1 mt-1.5">
                       {service.seedKeywords.slice(0, 4).map((kw) => (

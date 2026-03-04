@@ -3,7 +3,8 @@
 import { useCallback } from 'react';
 import { useWorkflow, type WizardStep } from '@/providers/workflow-provider';
 import { useAuth } from '@/providers/auth-provider';
-import type { CampaignStructure, SeedKeyword, SuppressedKeyword } from '@/lib/types/index';
+import type { SeedKeyword, SuppressedKeyword } from '@/lib/types/index';
+import type { CampaignStructureV2 } from '@/lib/types/index';
 import type { ServiceArea } from '@/lib/types/geo';
 import { getErrorMessage } from '@/lib/utils';
 
@@ -27,6 +28,7 @@ type CompetitorKeywordApi = {
 
 type ResearchCompetitorsResponse = {
   keywords?: CompetitorKeywordApi[];
+  competitors?: Array<{ name?: string; domain?: string; description?: string }>;
 };
 
 type GoogleKeywordApi = {
@@ -43,13 +45,33 @@ type GoogleKeywordsResponse = {
   keywords?: GoogleKeywordApi[];
 };
 
-type EnhanceKeywordsResponse = {
+type EnhancePhaseResponse = {
+  keywords: SeedKeyword[];
+  stats: {
+    model: string;
+    intentChanges: number;
+    themesReassigned: number;
+    negativesReclassified: number;
+    qualityAdjustments: number;
+    totalTokens: number;
+  };
+};
+
+type EnhanceMergeResponse = {
   keywords: SeedKeyword[];
   suppressed: SuppressedKeyword[];
 };
 
+type NegativeKeywordApi = {
+  campaign: string;
+  keyword: string;
+  matchType: 'Phrase' | 'Exact';
+  status: 'Negative';
+};
+
 type BuildCampaignResponse = {
-  campaigns: CampaignStructure[];
+  campaigns: CampaignStructureV2[];
+  negativeKeywords: NegativeKeywordApi[];
 };
 
 async function getApiErrorMessage(response: Response, fallback: string): Promise<string> {
@@ -108,8 +130,10 @@ export function useWorkflowData() {
     dispatch({ type: 'SET_PROCESSING', isProcessing: true });
     dispatch({ type: 'SET_ERROR', error: null });
     try {
-      // Step 1: Research competitors via Perplexity
+      // Step 1: Research competitors via Perplexity — used as seed input only
       onPhase?.('competitors');
+      let perplexitySeedTexts: string[] = [];
+      let competitorNames: string[] = [];
       const competitorRes = await fetch('/api/research-competitors', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -120,55 +144,105 @@ export function useWorkflowData() {
           openrouterApiKey,
         }),
       });
-      let perplexityKeywords: SeedKeyword[] = [];
       if (competitorRes.ok) {
         const competitorData = await competitorRes.json() as ResearchCompetitorsResponse;
         const competitorKeywords = Array.isArray(competitorData.keywords) ? competitorData.keywords : [];
-        perplexityKeywords = competitorKeywords
+        perplexitySeedTexts = competitorKeywords
           .filter((kw): kw is Required<Pick<CompetitorKeywordApi, 'text'>> & CompetitorKeywordApi => typeof kw.text === 'string' && kw.text.trim().length > 0)
-          .map((kw) => ({
-            text: kw.text.trim(),
-            volume: typeof kw.estimatedVolume === 'number' ? kw.estimatedVolume : 0,
-            cpc: typeof kw.estimatedCpc === 'number' ? kw.estimatedCpc : 0,
-            source: 'perplexity' as const,
-          }));
+          .map((kw) => kw.text.trim());
+        const competitors = Array.isArray(competitorData.competitors) ? competitorData.competitors : [];
+        competitorNames = competitors
+          .map((c) => c.name?.trim())
+          .filter((n): n is string => !!n);
       }
+      dispatch({ type: 'SET_COMPETITOR_NAMES', names: competitorNames });
 
-      // Step 2: Generate keywords via Google Ads
+      // Step 2: Generate keywords via Google Ads — one call per service
+      // Perplexity keywords are used as additional seed input only (no AI-estimated data in results)
       onPhase?.('google');
-      const seedTexts = [
-        ...state.selectedServices,
-        ...perplexityKeywords.slice(0, 10).map((kw: SeedKeyword) => kw.text),
-      ];
-      const googleRes = await fetch('/api/google-ads/keywords', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          seedKeywords: seedTexts,
-          targetUrl: state.targetUrl,
-          languageId: state.languageId,
-          geoTargetIds: [state.geoTargetId],
-        }),
-      });
-      let googleKeywords: SeedKeyword[] = [];
-      if (googleRes.ok) {
-        const googleData = await googleRes.json() as GoogleKeywordsResponse;
-        const keywordRows = Array.isArray(googleData.keywords) ? googleData.keywords : [];
-        googleKeywords = keywordRows
-          .filter((kw): kw is Required<Pick<GoogleKeywordApi, 'text'>> & GoogleKeywordApi => typeof kw.text === 'string' && kw.text.trim().length > 0)
-          .map((kw) => ({
-            text: kw.text.trim(),
-            volume: typeof kw.volume === 'number' ? kw.volume : 0,
-            cpc: typeof kw.cpc === 'number' ? kw.cpc : 0,
-            cpcLow: typeof kw.cpcLow === 'number' ? kw.cpcLow : 0,
-            cpcHigh: typeof kw.cpcHigh === 'number' ? kw.cpcHigh : 0,
-            competition: typeof kw.competition === 'string' ? kw.competition : '',
-            competitionIndex: typeof kw.competitionIndex === 'number' ? kw.competitionIndex : 0,
-            source: 'google_ads' as const,
-          }));
+      const perplexityByService = new Map<string, string[]>();
+      for (const kwText of perplexitySeedTexts) {
+        for (const svc of state.selectedServices) {
+          const svcLower = svc.toLowerCase();
+          if (kwText.toLowerCase().includes(svcLower) || svcLower.split(' ').some(w => kwText.toLowerCase().includes(w))) {
+            const existing = perplexityByService.get(svc) ?? [];
+            existing.push(kwText);
+            perplexityByService.set(svc, existing);
+            break;
+          }
+        }
       }
 
-      const allKeywords = [...perplexityKeywords, ...googleKeywords];
+      // Find relevant discovery seed keywords for each service
+      const discoveredSvcMap = new Map<string, string[]>();
+      for (const svc of state.discoveredServices) {
+        discoveredSvcMap.set(svc.name, svc.seedKeywords || []);
+      }
+
+      // Build location-specific seeds (replaces fabricated location variants)
+      const cities = state.detectedServiceArea?.cities ?? [];
+      const topCities = cities.slice(0, 3);
+
+      let googleKeywords: SeedKeyword[] = [];
+      for (const service of state.selectedServices) {
+        const discoverySeeds = discoveredSvcMap.get(service) ?? [];
+        const perplexityForService = (perplexityByService.get(service) ?? []).slice(0, 5);
+        const manualSeeds = state.manualSeedKeywords;
+
+        // Add context terms from discovery that are relevant to this service
+        const contextSeeds = (state.contextTerms ?? []).filter(term => {
+          const termLower = term.toLowerCase();
+          const serviceLower = service.toLowerCase();
+          return termLower.split(' ').some(w =>
+            w.length > 4 && (serviceLower.includes(w) || termLower.includes(serviceLower.split(' ')[0] ?? ''))
+          );
+        });
+
+        // Build seed list: manual seeds first, then service name, discovery seeds, perplexity seeds, context terms, location combos
+        const seedTexts = [
+          ...manualSeeds,
+          service,
+          ...discoverySeeds,
+          ...perplexityForService,
+          ...contextSeeds,
+          ...topCities.map(city => `${service} ${city}`),
+        ].filter(Boolean);
+
+        try {
+          const googleRes = await fetch('/api/google-ads/keywords', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              seedKeywords: seedTexts.slice(0, 20),
+              targetUrl: state.targetUrl,
+              languageId: state.languageId,
+              geoTargetIds: state.geoTargets.length > 0
+                ? state.geoTargets.map(t => t.id)
+                : [state.geoTargetId],
+            }),
+          });
+          if (googleRes.ok) {
+            const googleData = await googleRes.json() as GoogleKeywordsResponse;
+            const keywordRows = Array.isArray(googleData.keywords) ? googleData.keywords : [];
+            const parsed = keywordRows
+              .filter((kw): kw is Required<Pick<GoogleKeywordApi, 'text'>> & GoogleKeywordApi => typeof kw.text === 'string' && kw.text.trim().length > 0)
+              .map((kw) => ({
+                text: kw.text.trim(),
+                volume: typeof kw.volume === 'number' ? kw.volume : 0,
+                cpc: typeof kw.cpc === 'number' ? kw.cpc : 0,
+                cpcLow: typeof kw.cpcLow === 'number' ? kw.cpcLow : 0,
+                cpcHigh: typeof kw.cpcHigh === 'number' ? kw.cpcHigh : 0,
+                competition: typeof kw.competition === 'string' ? kw.competition : '',
+                competitionIndex: typeof kw.competitionIndex === 'number' ? kw.competitionIndex : 0,
+                source: 'google_ads' as const,
+              }));
+            googleKeywords.push(...parsed);
+          }
+        } catch { /* skip failed service call, continue with others */ }
+      }
+
+      // Only Google Ads data in the final results — no Perplexity or fabricated location variants
+      const allKeywords = [...googleKeywords];
       dispatch({ type: 'SET_SEED_KEYWORDS', keywords: allKeywords });
       return allKeywords;
     } catch (err: unknown) {
@@ -179,28 +253,80 @@ export function useWorkflowData() {
     }
   }, [dispatch, state, openrouterApiKey]);
 
-  const enhanceKeywords = useCallback(async (selected: SeedKeyword[], suppressed: SuppressedKeyword[]) => {
+  const enhanceKeywords = useCallback(async (
+    selected: SeedKeyword[],
+    suppressed: SuppressedKeyword[],
+    onPhase?: (phase: 'intent' | 'themes' | 'quality' | 'merge') => void,
+  ) => {
     dispatch({ type: 'SET_PROCESSING', isProcessing: true });
     dispatch({ type: 'SET_ERROR', error: null });
-    try {
-      const res = await fetch('/api/enhance', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          selected,
-          suppressed,
+
+    // Split keywords into chunks to keep each HTTP request under browser timeout (~45s).
+    // Each chunk is processed by the server which itself batches + parallelizes internally.
+    const CHUNK_SIZE = 200;
+    function chunkKeywords(kws: SeedKeyword[]): SeedKeyword[][] {
+      const chunks: SeedKeyword[][] = [];
+      for (let i = 0; i < kws.length; i += CHUNK_SIZE) {
+        chunks.push(kws.slice(i, i + CHUNK_SIZE));
+      }
+      return chunks.length > 0 ? chunks : [[]];
+    }
+
+    async function runPhase(
+      phase: string,
+      keywords: SeedKeyword[],
+      extra?: Record<string, unknown>,
+    ): Promise<SeedKeyword[]> {
+      const chunks = chunkKeywords(keywords);
+      const results: SeedKeyword[] = [];
+      for (const chunk of chunks) {
+        const payload: Record<string, unknown> = {
+          phase,
+          keywords: chunk,
           services: state.selectedServices,
           targetDomain: state.targetDomain,
-          strategy: state.strategy,
           openrouterApiKey,
-        }),
-      });
-      if (!res.ok) {
-        throw new Error(await getApiErrorMessage(res, 'Failed to enhance keywords'));
+          ...extra,
+        };
+        const res = await fetch('/api/enhance', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) throw new Error(await getApiErrorMessage(res, `Failed at ${phase} phase`));
+        const data = await res.json() as EnhancePhaseResponse;
+        results.push(...data.keywords);
       }
-      const data = await res.json() as EnhanceKeywordsResponse;
-      dispatch({ type: 'SET_ENHANCED_KEYWORDS', keywords: data.keywords, suppressed: data.suppressed });
-      return data;
+      return results;
+    }
+
+    try {
+      const allKeywords = [...selected, ...suppressed];
+
+      // Phase 1: Intent classification
+      onPhase?.('intent');
+      const intentKeywords = await runPhase('intent', allKeywords);
+
+      // Phase 2: Theme clustering
+      onPhase?.('themes');
+      const themesKeywords = await runPhase('themes', intentKeywords);
+
+      // Phase 3: Quality scoring
+      onPhase?.('quality');
+      const qualityKeywords = await runPhase('quality', themesKeywords, { strategy: state.strategy });
+
+      // Phase 4: Merge & filter (fast, no AI)
+      onPhase?.('merge');
+      const mergeRes = await fetch('/api/enhance', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phase: 'merge', keywords: qualityKeywords, strategy: state.strategy }),
+      });
+      if (!mergeRes.ok) throw new Error(await getApiErrorMessage(mergeRes, 'Failed to merge keywords'));
+      const mergeData = await mergeRes.json() as EnhanceMergeResponse;
+
+      dispatch({ type: 'SET_ENHANCED_KEYWORDS', keywords: mergeData.keywords, suppressed: mergeData.suppressed });
+      return mergeData;
     } catch (err: unknown) {
       dispatch({ type: 'SET_ERROR', error: getErrorMessage(err, 'Failed to enhance keywords') });
       throw err;
@@ -228,16 +354,25 @@ export function useWorkflowData() {
         qualityRating: kw.qualityRating,
         intent: kw.intent,
       }));
+      // Include all seed keywords so the API can compute negative keywords
+      const allKeywordMetrics = state.seedKeywords.map((kw) => ({
+        text: kw.text,
+        volume: kw.volume,
+        cpc: kw.cpc,
+      }));
       const res = await fetch('/api/build-campaign', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           services,
           keywords: keywordMetrics,
+          allKeywords: allKeywordMetrics,
+          competitorNames: state.competitorNames,
           options: {
             minAdGroupKeywords: state.strategy.minAdGroupKeywords,
             maxAdGroupKeywords: state.strategy.maxAdGroupKeywords,
           },
+          targetDomain: state.targetDomain,
         }),
       });
       if (!res.ok) {
@@ -245,6 +380,9 @@ export function useWorkflowData() {
       }
       const data = await res.json() as BuildCampaignResponse;
       dispatch({ type: 'SET_CAMPAIGNS', campaigns: data.campaigns });
+      if (Array.isArray(data.negativeKeywords)) {
+        dispatch({ type: 'SET_NEGATIVE_KEYWORDS', negativeKeywords: data.negativeKeywords });
+      }
       return data.campaigns;
     } catch (err: unknown) {
       dispatch({ type: 'SET_ERROR', error: getErrorMessage(err, 'Failed to build campaign') });
@@ -258,7 +396,11 @@ export function useWorkflowData() {
     const res = await fetch('/api/export-csv', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ campaigns: state.campaigns, defaultUrl: state.targetUrl }),
+      body: JSON.stringify({
+        campaigns: state.campaigns,
+        defaultUrl: state.targetUrl,
+        negativeKeywords: state.negativeKeywords,
+      }),
     });
     if (!res.ok) throw new Error('Failed to export CSV');
     const blob = await res.blob();
@@ -268,7 +410,7 @@ export function useWorkflowData() {
     a.download = 'campaign_structure.csv';
     a.click();
     URL.revokeObjectURL(url);
-  }, [state.campaigns, state.targetUrl]);
+  }, [state.campaigns, state.targetUrl, state.negativeKeywords]);
 
   return {
     ...state,

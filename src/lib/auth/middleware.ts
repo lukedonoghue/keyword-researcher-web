@@ -22,8 +22,8 @@ export async function requireGoogleAuth(): Promise<
 export function getGoogleAdsCredentials(session: SessionData) {
   return {
     developerToken: process.env.GOOGLE_ADS_DEVELOPER_TOKEN!,
-    clientId: process.env.GOOGLE_ADS_CLIENT_ID!,
-    clientSecret: process.env.GOOGLE_ADS_CLIENT_SECRET!,
+    clientId: process.env.GOOGLE_ADS_ORIG_CLIENT_ID || process.env.GOOGLE_ADS_CLIENT_ID!,
+    clientSecret: process.env.GOOGLE_ADS_ORIG_CLIENT_SECRET || process.env.GOOGLE_ADS_CLIENT_SECRET!,
     refreshToken: session.refreshToken!,
     customerId: session.customerId!,
   };

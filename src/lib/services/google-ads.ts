@@ -1,4 +1,6 @@
 import { GoogleAdsApi, enums } from 'google-ads-api';
+import type { CampaignStructureV2 } from '../types/index';
+import type { GeoLocationSuggestion } from '../types/geo';
 
 type KeywordMetric = {
   text: string;
@@ -220,6 +222,65 @@ export class GoogleAdsService {
     }
   }
 
+  async suggestGeoLocations(query: string, countryCode?: string): Promise<GeoLocationSuggestion[]> {
+    const customer = await this.getCustomer();
+    const request: Record<string, unknown> = {
+      location_names: { names: [query] },
+      locale: 'en',
+    };
+    if (countryCode) {
+      request.country_code = countryCode;
+    }
+
+    const response = await this.withTimeout(
+      customer.geoTargetConstants.suggestGeoTargetConstants(
+        request as unknown as Parameters<typeof customer.geoTargetConstants.suggestGeoTargetConstants>[0]
+      ),
+      GoogleAdsService.REQUEST_TIMEOUT_MS,
+      'Geo target suggestion request timed out.',
+    );
+
+    const responseRecord = this.asRecord(response);
+    const suggestions = Array.isArray(responseRecord.geo_target_constant_suggestions)
+      ? responseRecord.geo_target_constant_suggestions
+      : Array.isArray(response) ? response : [];
+
+    return suggestions
+      .map((item: unknown) => {
+        const suggestion = this.asRecord(item);
+        const constant = this.asRecord(suggestion.geo_target_constant);
+        const id = this.toNumber(constant.id);
+        if (!id) return null;
+        const name = typeof constant.name === 'string' ? constant.name : '';
+        const canonicalName = typeof constant.canonical_name === 'string'
+          ? constant.canonical_name
+          : typeof constant.canonicalName === 'string'
+            ? constant.canonicalName
+            : name;
+        const targetType = typeof constant.target_type === 'string'
+          ? constant.target_type
+          : typeof constant.targetType === 'string'
+            ? constant.targetType
+            : '';
+        const cc = typeof constant.country_code === 'string'
+          ? constant.country_code
+          : typeof constant.countryCode === 'string'
+            ? constant.countryCode
+            : '';
+        const reach = this.toNumber(suggestion.reach);
+
+        return {
+          id: String(id),
+          name,
+          canonicalName,
+          targetType,
+          countryCode: cc,
+          reach,
+        };
+      })
+      .filter((s: GeoLocationSuggestion | null): s is GeoLocationSuggestion => s !== null);
+  }
+
   async generateKeywordIdeas(
     seedKeywords: string[],
     targetUrl: string,
@@ -238,7 +299,7 @@ export class GoogleAdsService {
       geo_target_constants: geoTargetIds.map((id) => `geoTargetConstants/${id}`),
       keyword_plan_network: enums.KeywordPlanNetwork.GOOGLE_SEARCH,
       include_adult_keywords: false,
-      page_size: 100,
+      page_size: 500,
     };
 
     if (topSeeds.length > 0 && targetUrl) {
@@ -257,5 +318,146 @@ export class GoogleAdsService {
       'Google Ads keyword idea request timed out.',
     );
     return this.normalizeKeywordIdeas(response);
+  }
+
+  async createCampaignStructure(
+    campaigns: CampaignStructureV2[],
+    options: {
+      dailyBudgetMicros: number;
+      biddingStrategy: string;
+      geoTargetIds: string[];
+    }
+  ): Promise<{ created: { campaigns: number; adGroups: number; keywords: number }; errors: string[] }> {
+    const customer = await this.getCustomer();
+    const errors: string[] = [];
+    let createdCampaigns = 0;
+    let createdAdGroups = 0;
+    let createdKeywords = 0;
+
+    for (const campaign of campaigns) {
+      try {
+        // 1. Create campaign budget
+        const budgetResult = await customer.campaignBudgets.create([{
+          amount_micros: options.dailyBudgetMicros,
+          delivery_method: enums.BudgetDeliveryMethod.STANDARD,
+          name: `${campaign.campaignName} Budget - ${Date.now()}`,
+        }]);
+        const budgetResourceName = budgetResult.results?.[0]?.resource_name;
+        if (!budgetResourceName) {
+          errors.push(`Failed to create budget for ${campaign.campaignName}`);
+          continue;
+        }
+
+        // 2. Create campaign
+        const biddingStrategyType = options.biddingStrategy === 'MAXIMIZE_CONVERSIONS'
+          ? enums.BiddingStrategyType.MAXIMIZE_CONVERSIONS
+          : options.biddingStrategy === 'MANUAL_CPC'
+            ? enums.BiddingStrategyType.MANUAL_CPC
+            : enums.BiddingStrategyType.MAXIMIZE_CONVERSIONS;
+
+        const campaignResult = await customer.campaigns.create([{
+          name: campaign.campaignName,
+          advertising_channel_type: enums.AdvertisingChannelType.SEARCH,
+          status: enums.CampaignStatus.PAUSED,
+          campaign_budget: budgetResourceName,
+          bidding_strategy_type: biddingStrategyType,
+          network_settings: {
+            target_google_search: true,
+            target_search_network: false,
+            target_content_network: false,
+          },
+        }]);
+        const campaignResourceName = campaignResult.results?.[0]?.resource_name;
+        if (!campaignResourceName) {
+          errors.push(`Failed to create campaign ${campaign.campaignName}`);
+          continue;
+        }
+        createdCampaigns++;
+
+        // 3. Set geo targeting
+        if (options.geoTargetIds.length > 0) {
+          try {
+            await customer.campaignCriteria.create(
+              options.geoTargetIds.map((geoId) => ({
+                campaign: campaignResourceName,
+                geo_target_constant: `geoTargetConstants/${geoId}`,
+                type: enums.CriterionType.LOCATION,
+              }))
+            );
+          } catch { /* geo targeting is best-effort */ }
+        }
+
+        // 4. Create ad groups and keywords
+        for (const adGroup of campaign.adGroups) {
+          try {
+            const avgCpcMicros = this.calculateAvgCpcMicros(adGroup);
+            const adGroupResult = await customer.adGroups.create([{
+              name: adGroup.name,
+              campaign: campaignResourceName,
+              type: enums.AdGroupType.SEARCH_STANDARD,
+              cpc_bid_micros: avgCpcMicros || options.dailyBudgetMicros,
+              status: enums.AdGroupStatus.ENABLED,
+            }]);
+            const adGroupResourceName = adGroupResult.results?.[0]?.resource_name;
+            if (!adGroupResourceName) {
+              errors.push(`Failed to create ad group ${adGroup.name}`);
+              continue;
+            }
+            createdAdGroups++;
+
+            // 5. Create keywords for this ad group (batch all sub-themes)
+            const keywordCriteria = [];
+            for (const st of adGroup.subThemes) {
+              for (const kw of st.keywords) {
+                const matchType = kw.matchType === 'Exact'
+                  ? enums.KeywordMatchType.EXACT
+                  : enums.KeywordMatchType.PHRASE;
+                keywordCriteria.push({
+                  ad_group: adGroupResourceName,
+                  keyword: { text: kw.keyword, match_type: matchType },
+                  status: enums.AdGroupCriterionStatus.ENABLED,
+                });
+              }
+            }
+
+            if (keywordCriteria.length > 0) {
+              // Batch in groups of 5000 (API limit)
+              for (let i = 0; i < keywordCriteria.length; i += 5000) {
+                const batch = keywordCriteria.slice(i, i + 5000);
+                try {
+                  const kwResult = await customer.adGroupCriteria.create(batch);
+                  createdKeywords += kwResult.results?.length ?? batch.length;
+                } catch (err) {
+                  errors.push(`Failed to create keywords for ${adGroup.name}: ${err instanceof Error ? err.message : 'unknown error'}`);
+                }
+              }
+            }
+          } catch (err) {
+            errors.push(`Failed to create ad group ${adGroup.name}: ${err instanceof Error ? err.message : 'unknown error'}`);
+          }
+        }
+      } catch (err) {
+        errors.push(`Failed to create campaign ${campaign.campaignName}: ${err instanceof Error ? err.message : 'unknown error'}`);
+      }
+    }
+
+    return {
+      created: { campaigns: createdCampaigns, adGroups: createdAdGroups, keywords: createdKeywords },
+      errors,
+    };
+  }
+
+  private calculateAvgCpcMicros(adGroup: CampaignStructureV2['adGroups'][0]): number {
+    let totalCpc = 0;
+    let count = 0;
+    for (const st of adGroup.subThemes) {
+      for (const kw of st.keywords) {
+        if (kw.cpc > 0) {
+          totalCpc += kw.cpc;
+          count++;
+        }
+      }
+    }
+    return count > 0 ? Math.round((totalCpc / count) * 1_000_000) : 0;
   }
 }

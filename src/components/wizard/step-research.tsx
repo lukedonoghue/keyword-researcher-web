@@ -6,8 +6,10 @@ import { useWorkflowData } from '@/hooks/use-workflow-data';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { enrichSeedKeywordsWithSignals, applyStrategyFilter } from '@/lib/logic/strategy-filter';
 import { mergeKeywordsWithGoogleAdsAuthority } from '@/lib/logic/keyword-merge';
+import { calculateRecommendedBudget } from '@/lib/logic/budget-calculator';
 import type { SeedKeyword } from '@/lib/types/index';
 
 export function StepResearch() {
@@ -24,24 +26,19 @@ export function StepResearch() {
       const allKeywords = await researchKeywords((nextPhase) => setPhase(nextPhase));
 
       setPhase('merging');
-      const perplexityKws = allKeywords.filter((kw: SeedKeyword) => kw.source === 'perplexity');
-      const googleKws = allKeywords.filter((kw: SeedKeyword) => kw.source === 'google_ads');
-      const merged = mergeKeywordsWithGoogleAdsAuthority([perplexityKws, googleKws]);
+      const merged = mergeKeywordsWithGoogleAdsAuthority([allKeywords]);
 
       setPhase('filtering');
       const enriched = enrichSeedKeywordsWithSignals(merged);
-      const { selected, suppressed } = applyStrategyFilter(enriched, state.strategy);
+      const { selected, suppressed } = applyStrategyFilter(enriched, state.strategy, state.competitorNames);
 
       dispatch({ type: 'SET_SEED_KEYWORDS', keywords: merged });
       dispatch({ type: 'SET_FILTERED_KEYWORDS', selected, suppressed });
       setPhase('done');
-
-      // Auto-advance
-      dispatch({ type: 'SET_STEP', step: 'enhance' });
     } catch {
       // Error handled by useWorkflowData
     }
-  }, [dispatch, researchKeywords, state.strategy]);
+  }, [dispatch, researchKeywords, state.strategy, state.competitorNames]);
 
   useEffect(() => {
     if (startedRef.current || state.seedKeywords.length > 0) {
@@ -54,6 +51,11 @@ export function StepResearch() {
   }, [runResearch, state.seedKeywords.length]);
 
   const progressPercent = { competitors: 25, google: 50, merging: 75, filtering: 90, done: 100 }[phase];
+
+  const topKeywords = state.selectedKeywords
+    .slice()
+    .sort((a, b) => b.volume - a.volume)
+    .slice(0, 5);
 
   return (
     <div className="space-y-4 max-w-xl">
@@ -80,13 +82,89 @@ export function StepResearch() {
             </p>
           )}
 
-          {state.seedKeywords.length > 0 && (
+          {state.seedKeywords.length > 0 && phase !== 'done' && (
             <p className="text-xs text-muted-foreground">
               Found {state.seedKeywords.length} keywords, {state.selectedKeywords.length} passed filters.
             </p>
           )}
         </CardContent>
       </Card>
+
+      {phase === 'done' && state.selectedKeywords.length > 0 && (() => {
+        const budget = calculateRecommendedBudget(state.selectedKeywords);
+        return (
+          <Card className="border-green-200 bg-green-50 dark:border-green-900 dark:bg-green-950/30">
+            <CardContent className="py-5 space-y-4">
+              <p className="text-sm font-medium text-green-800 dark:text-green-200">
+                Found {state.seedKeywords.length} keywords. {state.selectedKeywords.length} passed your strategy filters.
+              </p>
+
+              {topKeywords.length > 0 && (
+                <div className="space-y-1.5">
+                  <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Top keywords by volume</p>
+                  <div className="rounded-md border border-green-200 dark:border-green-900 overflow-hidden">
+                    <Table>
+                      <TableHeader>
+                        <TableRow className="bg-green-100/50 dark:bg-green-900/30">
+                          <TableHead className="text-[11px] h-7 py-0">Keyword</TableHead>
+                          <TableHead className="text-[11px] h-7 py-0 text-right">Volume</TableHead>
+                          <TableHead className="text-[11px] h-7 py-0 text-right">CPC</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {topKeywords.map((kw) => (
+                          <TableRow key={kw.text} className="bg-white/50 dark:bg-transparent">
+                            <TableCell className="text-xs py-1.5">{kw.text}</TableCell>
+                            <TableCell className="text-xs py-1.5 text-right tabular-nums">{kw.volume.toLocaleString()}</TableCell>
+                            <TableCell className="text-xs py-1.5 text-right tabular-nums">
+                              ${kw.cpc.toFixed(2)}
+                              {(kw.cpcLow || kw.cpcHigh) ? (
+                                <span className="text-[10px] text-muted-foreground block">
+                                  ${(kw.cpcLow ?? 0).toFixed(2)}–${(kw.cpcHigh ?? 0).toFixed(2)}
+                                </span>
+                              ) : null}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                    <div className="px-2 py-1 bg-green-100/30 dark:bg-green-900/20 border-t border-green-200 dark:border-green-900">
+                      <p className="text-[10px] text-muted-foreground">
+                        CPC = avg of top-of-page bid range from Google Keyword Planner for your selected location. Range shows low (page bottom) to high (page top) estimates.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {budget.avgCpc > 0 && (
+                <div className="rounded-md border border-green-200 dark:border-green-900 bg-white/60 dark:bg-green-950/40 px-3 py-2.5 space-y-1">
+                  <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Budget Insight</p>
+                  <p className="text-xs text-green-800 dark:text-green-200">
+                    Average CPC: <span className="font-semibold tabular-nums">${budget.avgCpc.toFixed(2)}</span>
+                  </p>
+                  <p className="text-xs text-green-800 dark:text-green-200">
+                    To target 20 clicks/day (~1 conversion/day at 5% CR):
+                    {' '}<span className="font-semibold tabular-nums">${budget.recommendedDaily.toFixed(0)}/day</span>
+                    {' '}(<span className="tabular-nums">${budget.recommendedMonthly.toFixed(0)}/mo</span>)
+                  </p>
+                  <p className="text-[11px] text-muted-foreground">
+                    Total monthly search volume: {budget.totalMonthlyVolume.toLocaleString()}
+                  </p>
+                </div>
+              )}
+
+              <Button
+                size="sm"
+                className="w-full h-9"
+                onClick={() => dispatch({ type: 'SET_STEP', step: 'enhance' })}
+              >
+                Continue to AI Enhancement
+              </Button>
+            </CardContent>
+          </Card>
+        );
+      })()}
 
       {error && (
         <Card className="border-destructive">
@@ -99,15 +177,26 @@ export function StepResearch() {
         </Card>
       )}
 
-      <Button
-        variant="outline"
-        size="sm"
-        className="h-8"
-        onClick={() => dispatch({ type: 'SET_STEP', step: 'strategy' })}
-        disabled={isProcessing}
-      >
-        Back
-      </Button>
+      <div className="flex items-center gap-2">
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-8"
+          onClick={() => dispatch({ type: 'SET_STEP', step: 'strategy' })}
+          disabled={isProcessing}
+        >
+          Back
+        </Button>
+        {phase === 'done' && (
+          <Button
+            size="sm"
+            className="h-8"
+            onClick={() => dispatch({ type: 'SET_STEP', step: 'enhance' })}
+          >
+            Continue to AI Enhancement
+          </Button>
+        )}
+      </div>
     </div>
   );
 }

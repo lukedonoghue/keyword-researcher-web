@@ -28,8 +28,8 @@ Return a JSON object with:
 - services: array of services they offer, each with:
   - name: service name (concise, 2-4 words)
   - description: brief description
-  - seedKeywords: 3-5 PPC keyword ideas for this service
-  - landingPage: specific URL for this service if identifiable
+  - seedKeywords: 8-12 PPC keyword ideas for this service. Include cost/pricing queries (e.g. "service cost", "service price"), "near me" variants, and material/method variants. Be thorough.
+  - landingPage: specific URL for this service if identifiable. Each service MUST have a unique landingPage URL — never assign the same page to multiple services.
 - serviceArea: geographic service area with:
   - country: primary country (ISO 2-letter code, e.g. "US", "GB", "AU")
   - states: array of states/regions they specifically serve (empty if nationwide)

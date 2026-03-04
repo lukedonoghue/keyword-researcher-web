@@ -99,6 +99,38 @@ export function toNumber(raw: unknown): number {
   return 0;
 }
 
+export function generateLocationVariants(
+  keywords: SeedKeyword[],
+  cities: string[],
+  maxPerKeyword: number = 3
+): SeedKeyword[] {
+  if (cities.length === 0) return [];
+  const topCities = cities.slice(0, maxPerKeyword);
+  const variants: SeedKeyword[] = [];
+  const seen = new Set(keywords.map((kw) => kw.text.toLowerCase()));
+
+  for (const keyword of keywords) {
+    // Skip keywords that already contain a city name
+    const kwLower = keyword.text.toLowerCase();
+    if (topCities.some((c) => kwLower.includes(c.toLowerCase()))) continue;
+
+    for (const city of topCities) {
+      const variantText = `${keyword.text} ${city}`;
+      const variantKey = variantText.toLowerCase();
+      if (seen.has(variantKey)) continue;
+      seen.add(variantKey);
+      variants.push({
+        ...keyword,
+        text: variantText,
+        volume: Math.round(keyword.volume * 0.5),
+        source: 'google_ads',
+      });
+    }
+  }
+
+  return variants;
+}
+
 export function parseKeywordsFromInput(input: string, source: SeedKeyword['source'] = 'manual'): SeedKeyword[] {
   return normalizeItems(input.split(',')).map((keyword) => ({
     text: keyword,

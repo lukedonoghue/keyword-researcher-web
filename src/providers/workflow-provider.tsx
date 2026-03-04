@@ -1,8 +1,8 @@
 'use client';
 
 import { createContext, useContext, useReducer, type ReactNode, type Dispatch } from 'react';
-import type { SeedKeyword, SuppressedKeyword, CampaignStrategy, CampaignStructure, ServiceContext } from '@/lib/types/index';
-import type { ServiceArea } from '@/lib/types/geo';
+import type { SeedKeyword, SuppressedKeyword, CampaignStrategy, CampaignStructureV2, ServiceContext, NegativeKeyword } from '@/lib/types/index';
+import type { ServiceArea, GeoLocationSuggestion } from '@/lib/types/geo';
 
 export type WizardStep =
   | 'setup'
@@ -39,6 +39,7 @@ export type WorkflowState = {
   selectedServices: string[];
   selectedServiceContexts: ServiceContext[];
   geoTargetId: string;
+  geoTargets: GeoLocationSuggestion[];
   languageId: string;
   geoCountryCode: string;
   geoDisplayName: string;
@@ -48,7 +49,10 @@ export type WorkflowState = {
   suppressedKeywords: SuppressedKeyword[];
   enhancedKeywords: SeedKeyword[];
   enhancedSuppressed: SuppressedKeyword[];
-  campaigns: CampaignStructure[];
+  campaigns: CampaignStructureV2[];
+  manualSeedKeywords: string[];
+  competitorNames: string[];
+  negativeKeywords: NegativeKeyword[];
   isProcessing: boolean;
   error: string | null;
 };
@@ -56,10 +60,10 @@ export type WorkflowState = {
 const initialStrategy: CampaignStrategy = {
   goal: 'conversions',
   monthlyBudget: 2000,
-  minVolume: 200,
+  minVolume: 50,
   maxCpc: 12,
   minAdGroupKeywords: 3,
-  maxAdGroupKeywords: 10,
+  maxAdGroupKeywords: 20,
   focusHighIntent: true,
   includeInformational: false,
   includeNegativeCandidates: false,
@@ -79,6 +83,7 @@ const initialState: WorkflowState = {
   selectedServices: [],
   selectedServiceContexts: [],
   geoTargetId: '2840',
+  geoTargets: [],
   languageId: '1000',
   geoCountryCode: 'US',
   geoDisplayName: 'United States',
@@ -89,6 +94,9 @@ const initialState: WorkflowState = {
   enhancedKeywords: [],
   enhancedSuppressed: [],
   campaigns: [],
+  manualSeedKeywords: [],
+  competitorNames: [],
+  negativeKeywords: [],
   isProcessing: false,
   error: null,
 };
@@ -101,6 +109,8 @@ function createDownstreamResearchReset() {
     enhancedKeywords: [],
     enhancedSuppressed: [],
     campaigns: [],
+    competitorNames: [],
+    negativeKeywords: [],
   };
 }
 
@@ -110,11 +120,15 @@ export type WorkflowAction =
   | { type: 'SET_DISCOVERY'; businessName: string; businessDescription: string; businessType: string; services: WorkflowState['discoveredServices']; serviceArea: ServiceArea | null; detectedCountryCode: string | null; contextTerms: string[] }
   | { type: 'SET_SELECTED_SERVICES'; services: string[]; contexts: ServiceContext[] }
   | { type: 'SET_GEO'; geoTargetId: string; languageId: string; countryCode: string; displayName: string }
+  | { type: 'SET_GEO_TARGETS'; targets: GeoLocationSuggestion[]; languageId: string }
   | { type: 'SET_STRATEGY'; strategy: CampaignStrategy }
   | { type: 'SET_SEED_KEYWORDS'; keywords: SeedKeyword[] }
   | { type: 'SET_FILTERED_KEYWORDS'; selected: SeedKeyword[]; suppressed: SuppressedKeyword[] }
   | { type: 'SET_ENHANCED_KEYWORDS'; keywords: SeedKeyword[]; suppressed: SuppressedKeyword[] }
-  | { type: 'SET_CAMPAIGNS'; campaigns: CampaignStructure[] }
+  | { type: 'SET_CAMPAIGNS'; campaigns: CampaignStructureV2[] }
+  | { type: 'SET_MANUAL_SEEDS'; keywords: string[] }
+  | { type: 'SET_COMPETITOR_NAMES'; names: string[] }
+  | { type: 'SET_NEGATIVE_KEYWORDS'; negativeKeywords: NegativeKeyword[] }
   | { type: 'SET_PROCESSING'; isProcessing: boolean }
   | { type: 'SET_ERROR'; error: string | null }
   | { type: 'RESET' };
@@ -138,6 +152,7 @@ function workflowReducer(state: WorkflowState, action: WorkflowAction): Workflow
         selectedServices: [],
         selectedServiceContexts: [],
         geoTargetId: initialState.geoTargetId,
+        geoTargets: [],
         languageId: initialState.languageId,
         geoCountryCode: initialState.geoCountryCode,
         geoDisplayName: initialState.geoDisplayName,
@@ -171,9 +186,21 @@ function workflowReducer(state: WorkflowState, action: WorkflowAction): Workflow
       return {
         ...state,
         geoTargetId: action.geoTargetId,
+        geoTargets: [],
         languageId: action.languageId,
         geoCountryCode: action.countryCode,
         geoDisplayName: action.displayName,
+        ...createDownstreamResearchReset(),
+      };
+    case 'SET_GEO_TARGETS':
+      return {
+        ...state,
+        geoTargets: action.targets,
+        geoTargetId: action.targets.length > 0 ? action.targets[0].id : state.geoTargetId,
+        languageId: action.languageId,
+        geoDisplayName: action.targets.length > 0
+          ? action.targets.map((t) => t.name).join(', ')
+          : state.geoDisplayName,
         ...createDownstreamResearchReset(),
       };
     case 'SET_STRATEGY':
@@ -186,6 +213,12 @@ function workflowReducer(state: WorkflowState, action: WorkflowAction): Workflow
       return { ...state, enhancedKeywords: action.keywords, enhancedSuppressed: action.suppressed };
     case 'SET_CAMPAIGNS':
       return { ...state, campaigns: action.campaigns };
+    case 'SET_MANUAL_SEEDS':
+      return { ...state, manualSeedKeywords: action.keywords, ...createDownstreamResearchReset() };
+    case 'SET_COMPETITOR_NAMES':
+      return { ...state, competitorNames: action.names };
+    case 'SET_NEGATIVE_KEYWORDS':
+      return { ...state, negativeKeywords: action.negativeKeywords };
     case 'SET_PROCESSING':
       return { ...state, isProcessing: action.isProcessing };
     case 'SET_ERROR':

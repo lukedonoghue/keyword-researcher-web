@@ -1,9 +1,9 @@
 import type { SeedKeyword, SuppressedKeyword, CampaignStrategy } from '../types/index';
 import { getKeywordQualityScore } from './quality-score';
-import { analyzeKeywordSignals } from './keyword-signals';
+import { analyzeKeywordSignals, isCompetitorBrand } from './keyword-signals';
 import { dedupeSeedKeywords } from './keyword-merge';
 
-export function applyStrategyFilter(keywords: SeedKeyword[], strategy: CampaignStrategy): {
+export function applyStrategyFilter(keywords: SeedKeyword[], strategy: CampaignStrategy, competitorNames: string[] = []): {
   selected: SeedKeyword[];
   suppressed: SuppressedKeyword[];
 } {
@@ -12,6 +12,11 @@ export function applyStrategyFilter(keywords: SeedKeyword[], strategy: CampaignS
 
   for (const keyword of keywords) {
     const reasons: string[] = [];
+
+    const competitorMatch = isCompetitorBrand(keyword.text, competitorNames);
+    if (competitorMatch) {
+      reasons.push(`Contains competitor brand name: ${competitorMatch}`);
+    }
 
     if (keyword.volume < strategy.minVolume) {
       reasons.push(`Search volume ${keyword.volume} below strategy minimum ${strategy.minVolume}`);
@@ -89,10 +94,10 @@ export function buildCampaignStrategyDefaults(): CampaignStrategy {
   return {
     goal: 'conversions',
     monthlyBudget: 2000,
-    minVolume: 200,
+    minVolume: 50,
     maxCpc: 12,
     minAdGroupKeywords: 3,
-    maxAdGroupKeywords: 10,
+    maxAdGroupKeywords: 20,
     focusHighIntent: true,
     includeInformational: false,
     includeNegativeCandidates: false,
@@ -110,9 +115,9 @@ export function buildCampaignStrategyFromInput(input: {
   includeNegativeCandidates: boolean;
 }): CampaignStrategy {
   const minVolume =
-    input.goal === 'conversions' ? Math.max(50, Math.round(input.monthlyBudget * 0.012))
-      : input.goal === 'traffic' ? Math.max(20, Math.round(input.monthlyBudget * 0.003))
-      : Math.max(35, Math.round(input.monthlyBudget * 0.008));
+    input.goal === 'conversions' ? Math.max(10, Math.round(input.monthlyBudget * 0.005))
+      : input.goal === 'traffic' ? Math.max(10, Math.round(input.monthlyBudget * 0.003))
+      : Math.max(10, Math.round(input.monthlyBudget * 0.005));
 
   const minAdGroupKeywords = Math.max(1, Math.round(input.minAdGroupKeywords || 1));
   const maxAdGroupKeywords = Math.max(minAdGroupKeywords, Math.round(input.maxAdGroupKeywords || minAdGroupKeywords));

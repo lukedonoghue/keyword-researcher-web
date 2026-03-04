@@ -31,6 +31,13 @@ export type SuppressedKeyword = SeedKeyword & {
   suppressionReasons: string[];
 };
 
+export type NegativeKeyword = {
+  campaign: string;
+  keyword: string;
+  matchType: 'Phrase' | 'Exact';
+  status: 'Negative';
+};
+
 export type ServiceContext = {
   name: string;
   landingPage: string;
@@ -100,18 +107,49 @@ export type CampaignRow = {
   qualityRating: string;
 };
 
-export type CampaignStructure = {
-  campaignName: string;
-  landingPage?: string;
-  adGroups: Record<string, Array<{
-    keyword: string;
-    matchType: string;
-    volume: number;
-    cpc: number;
-    cpcLow?: number;
-    cpcHigh?: number;
-    competitionIndex?: number;
-    qualityScore?: number;
-    qualityRating?: string;
-  }>>;
+export type SubThemeKeyword = {
+  keyword: string;
+  matchType: string;
+  volume: number;
+  cpc: number;
+  cpcLow?: number;
+  cpcHigh?: number;
+  competitionIndex?: number;
+  qualityScore?: number;
+  qualityRating?: string;
+  intent?: KeywordIntent;
 };
+
+export type SubTheme = {
+  name: string;
+  keywords: SubThemeKeyword[];
+};
+
+export type AdGroup = {
+  name: string;
+  subThemes: SubTheme[];
+};
+
+export type CampaignStructureV2 = {
+  campaignName: string;
+  campaignTheme: string;
+  landingPage?: string;
+  bidStrategy: string;
+  dailyBudget?: number;
+  adGroups: AdGroup[];
+  priority?: 'high' | 'medium' | 'low';
+  priorityScore?: number;
+  intentBreakdown?: {
+    transactional: number;
+    commercial: number;
+    informational: number;
+    navigational: number;
+    unknown: number;
+  };
+  avgCpc?: number;
+  totalVolume?: number;
+  recommendedBidStrategy?: string;
+};
+
+/** @deprecated Use CampaignStructureV2 instead */
+export type CampaignStructure = CampaignStructureV2;

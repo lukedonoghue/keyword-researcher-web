@@ -319,6 +319,18 @@ export function classifyKeywordIntent(text: string): Pick<KeywordSignal, 'intent
   return { intent, intentConfidence: confidence, intentReason };
 }
 
+export function isCompetitorBrand(text: string, competitorNames: string[]): string | null {
+  if (competitorNames.length === 0) return null;
+  const normalized = normalizeKeywordText(text);
+  for (const name of competitorNames) {
+    const normalizedName = normalizeKeywordText(name);
+    if (!normalizedName) continue;
+    const pattern = new RegExp(`\\b${normalizedName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+    if (pattern.test(normalized)) return name;
+  }
+  return null;
+}
+
 export function analyzeKeywordSignals(text: string): KeywordSignal {
   const normalized = normalizeKeywordText(text);
   const intentResult = classifyKeywordIntent(text);

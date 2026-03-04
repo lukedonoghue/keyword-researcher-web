@@ -1,8 +1,10 @@
 import { OpenRouterService } from '../services/openrouter';
 import type { SeedKeyword, SuppressedKeyword, KeywordIntent, CampaignStrategy } from '../types/index';
 import { getKeywordQualityScore } from './quality-score';
+import { dedupeSeedKeywords } from './keyword-merge';
 
 const BATCH_SIZE = 80;
+const MAX_CONCURRENT_BATCHES = 4;
 
 export type AiEnhanceProgress = {
   phase: 'intent' | 'themes' | 'quality' | 'merging' | 'done';
@@ -23,12 +25,21 @@ export type AiEnhanceResult = {
   };
 };
 
-type IntentPassItem = { text: string; currentIntent: string; isNegative: boolean };
+export type PhaseResult = {
+  keywords: SeedKeyword[];
+  stats: {
+    model: string;
+    intentChanges: number;
+    themesReassigned: number;
+    negativesReclassified: number;
+    qualityAdjustments: number;
+    totalTokens: number;
+  };
+};
+
 type IntentPassResult = { keywords: Array<{ text: string; intent: KeywordIntent; confidence: number; reason: string; isNegative: boolean }> };
-type ThemePassItem = { text: string; currentThemes: string[] };
 type ThemeCluster = { clusterName: string; service: string; keywords: string[] };
 type ThemePassResult = { clusters: ThemeCluster[] };
-type QualityPassItem = { text: string; volume: number; cpc: number; currentScore: number; intent: string };
 type QualityAdjustment = { text: string; adjustment: number; reason: string };
 type QualityPassResult = { adjustments: QualityAdjustment[] };
 
@@ -40,47 +51,56 @@ function chunkArray<T>(arr: T[], size: number): T[][] {
   return chunks;
 }
 
-export async function enhanceWithAi(
-  selected: SeedKeyword[],
-  suppressed: SuppressedKeyword[],
+async function runBatchesConcurrently<TBatch, TResult>(
+  batches: TBatch[][],
+  processBatch: (batch: TBatch[]) => Promise<TResult | null>,
+): Promise<TResult[]> {
+  const results: TResult[] = [];
+  for (let i = 0; i < batches.length; i += MAX_CONCURRENT_BATCHES) {
+    const concurrent = batches.slice(i, i + MAX_CONCURRENT_BATCHES);
+    const batchResults = await Promise.all(concurrent.map(processBatch));
+    for (const r of batchResults) {
+      if (r) results.push(r);
+    }
+  }
+  return results;
+}
+
+function buildKeywordMap(keywords: SeedKeyword[]): Map<string, SeedKeyword> {
+  const map = new Map<string, SeedKeyword>();
+  for (const kw of keywords) {
+    map.set(kw.text.toLowerCase(), { ...kw });
+  }
+  return map;
+}
+
+function extractKeywords(map: Map<string, SeedKeyword>): SeedKeyword[] {
+  return Array.from(map.values());
+}
+
+// --- Phase 1: Intent Classification ---
+export async function runIntentPhase(
+  keywords: SeedKeyword[],
   services: string[],
   targetDomain: string,
-  strategy: CampaignStrategy | null,
   apiKey: string,
-  onProgress?: (progress: AiEnhanceProgress) => void,
-): Promise<AiEnhanceResult> {
+): Promise<PhaseResult> {
   const client = new OpenRouterService(apiKey);
-
   if (!client.isAvailable()) {
-    return {
-      keywords: selected,
-      suppressed,
-      stats: { model: '', intentChanges: 0, themesReassigned: 0, negativesReclassified: 0, qualityAdjustments: 0, totalTokens: 0 },
-    };
+    return { keywords, stats: { model: '', intentChanges: 0, themesReassigned: 0, negativesReclassified: 0, qualityAdjustments: 0, totalTokens: 0 } };
   }
 
   const model = client.getModel();
   let totalTokens = 0;
   let intentChanges = 0;
-  let themesReassigned = 0;
   let negativesReclassified = 0;
-  let qualityAdjustments = 0;
-  const qualityAdjustedKeys = new Set<string>();
+  const keywordMap = buildKeywordMap(keywords);
 
-  const allKeywords = [...selected, ...suppressed];
-  const keywordMap = new Map<string, SeedKeyword>();
-  for (const kw of allKeywords) {
-    keywordMap.set(kw.text.toLowerCase(), { ...kw });
-  }
-
-  // --- Pass 1: Intent Classification ---
-  onProgress?.({ phase: 'intent', status: 'starting', message: 'Classifying intent...' });
-  const intentItems: IntentPassItem[] = allKeywords.map((kw) => ({
+  const intentItems = keywords.map((kw) => ({
     text: kw.text, currentIntent: kw.intent || 'unknown', isNegative: kw.isNegativeCandidate || false,
   }));
 
-  for (const batch of chunkArray(intentItems, BATCH_SIZE)) {
-    onProgress?.({ phase: 'intent', status: 'running', message: `Processing ${batch.length} keywords...` });
+  await runBatchesConcurrently(chunkArray(intentItems, BATCH_SIZE), async (batch) => {
     try {
       const { data, usage } = await client.jsonPrompt<IntentPassResult>(
         `You are a PPC keyword intent classifier for a ${targetDomain} business offering these services: ${services.join(', ')}.
@@ -104,17 +124,35 @@ Return JSON: { "keywords": [{ "text": string, "intent": "transactional"|"commerc
         kw.aiConfidence = item.confidence;
         kw.aiReason = item.reason;
       }
-    } catch { /* graceful degradation */ }
+      return data;
+    } catch { return null; }
+  });
+
+  return {
+    keywords: extractKeywords(keywordMap),
+    stats: { model, intentChanges, themesReassigned: 0, negativesReclassified, qualityAdjustments: 0, totalTokens },
+  };
+}
+
+// --- Phase 2: Theme Clustering ---
+export async function runThemesPhase(
+  keywords: SeedKeyword[],
+  services: string[],
+  apiKey: string,
+): Promise<PhaseResult> {
+  const client = new OpenRouterService(apiKey);
+  if (!client.isAvailable()) {
+    return { keywords, stats: { model: '', intentChanges: 0, themesReassigned: 0, negativesReclassified: 0, qualityAdjustments: 0, totalTokens: 0 } };
   }
-  onProgress?.({ phase: 'intent', status: 'done', message: `${intentChanges} intent changes` });
 
-  // --- Pass 2: Theme Clustering ---
-  onProgress?.({ phase: 'themes', status: 'starting', message: 'Clustering themes...' });
-  const selectedKeys = new Set(selected.map((kw) => kw.text.toLowerCase()));
-  const themeItems: ThemePassItem[] = selected.map((kw) => ({ text: kw.text, currentThemes: kw.themes || ['General'] }));
+  const model = client.getModel();
+  let totalTokens = 0;
+  let themesReassigned = 0;
+  const keywordMap = buildKeywordMap(keywords);
+  const keySet = new Set(keywords.map((kw) => kw.text.toLowerCase()));
+  const themeItems = keywords.map((kw) => ({ text: kw.text, currentThemes: kw.themes || ['General'] }));
 
-  for (const batch of chunkArray(themeItems, BATCH_SIZE)) {
-    onProgress?.({ phase: 'themes', status: 'running', message: `Clustering ${batch.length} keywords...` });
+  await runBatchesConcurrently(chunkArray(themeItems, BATCH_SIZE), async (batch) => {
     try {
       const { data, usage } = await client.jsonPrompt<ThemePassResult>(
         `You are a PPC keyword theme organizer for a business offering: ${services.join(', ')}.
@@ -127,7 +165,7 @@ Every input keyword must appear in exactly one cluster.`,
       for (const cluster of data.clusters) {
         for (const kwText of cluster.keywords) {
           const key = kwText.toLowerCase();
-          if (!selectedKeys.has(key)) continue;
+          if (!keySet.has(key)) continue;
           const kw = keywordMap.get(key);
           if (!kw) continue;
           const oldThemes = (kw.themes || []).join(',');
@@ -135,24 +173,46 @@ Every input keyword must appear in exactly one cluster.`,
           if (oldThemes !== kw.themes.join(',')) themesReassigned++;
         }
       }
-    } catch { /* graceful degradation */ }
-  }
-  onProgress?.({ phase: 'themes', status: 'done', message: `${themesReassigned} themes reassigned` });
+      return data;
+    } catch { return null; }
+  });
 
-  // --- Pass 3: Quality Score Adjustment ---
-  onProgress?.({ phase: 'quality', status: 'starting', message: 'Adjusting quality scores...' });
-  const qualityItems: QualityPassItem[] = selected.map((kw) => ({
-    text: kw.text, volume: kw.volume, cpc: kw.cpc,
-    currentScore: kw.qualityScore || 50,
-    intent: keywordMap.get(kw.text.toLowerCase())?.intent || kw.intent || 'unknown',
-  }));
+  return {
+    keywords: extractKeywords(keywordMap),
+    stats: { model, intentChanges: 0, themesReassigned, negativesReclassified: 0, qualityAdjustments: 0, totalTokens },
+  };
+}
+
+// --- Phase 3: Quality Score Adjustment ---
+export async function runQualityPhase(
+  keywords: SeedKeyword[],
+  services: string[],
+  targetDomain: string,
+  strategy: CampaignStrategy | null,
+  apiKey: string,
+): Promise<PhaseResult> {
+  const client = new OpenRouterService(apiKey);
+  if (!client.isAvailable()) {
+    return { keywords, stats: { model: '', intentChanges: 0, themesReassigned: 0, negativesReclassified: 0, qualityAdjustments: 0, totalTokens: 0 } };
+  }
+
+  const model = client.getModel();
+  let totalTokens = 0;
+  let qualityAdjustments = 0;
+  const keywordMap = buildKeywordMap(keywords);
+  const qualityAdjustedKeys = new Set<string>();
 
   const strategyContext = strategy
     ? `Campaign goal: ${strategy.goal}, monthly budget: $${strategy.monthlyBudget}, max CPC: ${strategy.maxCpc ?? 'none'}`
     : 'No specific strategy context';
 
-  for (const batch of chunkArray(qualityItems, BATCH_SIZE)) {
-    onProgress?.({ phase: 'quality', status: 'running', message: `Scoring ${batch.length} keywords...` });
+  const qualityItems = keywords.map((kw) => ({
+    text: kw.text, volume: kw.volume, cpc: kw.cpc,
+    currentScore: kw.qualityScore || 50,
+    intent: kw.intent || 'unknown',
+  }));
+
+  await runBatchesConcurrently(chunkArray(qualityItems, BATCH_SIZE), async (batch) => {
     try {
       const { data, usage } = await client.jsonPrompt<QualityPassResult>(
         `You are a PPC quality scoring expert for ${targetDomain} (services: ${services.join(', ')}).
@@ -180,54 +240,101 @@ Return JSON: { "adjustments": [{ "text": string, "adjustment": number (-15 to +1
         qualityAdjustedKeys.add(key);
         qualityAdjustments++;
       }
-    } catch { /* graceful degradation */ }
-  }
-  onProgress?.({ phase: 'quality', status: 'done', message: `${qualityAdjustments} adjustments` });
+      return data;
+    } catch { return null; }
+  });
 
-  // --- Merge ---
-  onProgress?.({ phase: 'merging', status: 'running', message: 'Reclassifying keywords...' });
+  // Apply heuristic quality scores to keywords not adjusted by AI
+  for (const kw of keywordMap.values()) {
+    if (!qualityAdjustedKeys.has(kw.text.toLowerCase())) {
+      const quality = getKeywordQualityScore(kw);
+      kw.qualityScore = quality.score;
+      kw.qualityRating = quality.rating;
+    }
+  }
+
+  return {
+    keywords: extractKeywords(keywordMap),
+    stats: { model, intentChanges: 0, themesReassigned: 0, negativesReclassified: 0, qualityAdjustments, totalTokens },
+  };
+}
+
+// --- Merge: apply strategy filters and dedupe ---
+export function mergeAndFilter(
+  keywords: SeedKeyword[],
+  strategy: CampaignStrategy | null,
+): { selected: SeedKeyword[]; suppressed: SuppressedKeyword[] } {
   const newSelected: SeedKeyword[] = [];
   const newSuppressed: SuppressedKeyword[] = [];
 
-  for (const kw of allKeywords) {
-    const key = kw.text.toLowerCase();
-    const updated = keywordMap.get(key) || kw;
+  for (const kw of keywords) {
     const suppressionReasons: string[] = [];
 
-    if (updated.isNegativeCandidate && strategy && !strategy.includeNegativeCandidates) {
+    if (kw.isNegativeCandidate && strategy && !strategy.includeNegativeCandidates) {
       suppressionReasons.push('AI flagged as negative/irrelevant');
     }
-    if (updated.intent === 'navigational' && strategy?.focusHighIntent) {
+    if (kw.intent === 'navigational' && strategy?.focusHighIntent) {
       suppressionReasons.push('Navigational intent filtered for conversion focus');
     }
-    if (updated.intent === 'informational' && strategy && !strategy.includeInformational && strategy.focusHighIntent) {
+    if (kw.intent === 'informational' && strategy && !strategy.includeInformational && strategy.focusHighIntent) {
       suppressionReasons.push('Informational intent filtered out by strategy');
     }
-    if (strategy && updated.volume < strategy.minVolume) {
-      suppressionReasons.push(`Volume ${updated.volume} below minimum ${strategy.minVolume}`);
+    if (strategy && kw.volume < strategy.minVolume) {
+      suppressionReasons.push(`Volume ${kw.volume} below minimum ${strategy.minVolume}`);
     }
-    if (strategy?.maxCpc !== null && strategy?.maxCpc !== undefined && strategy.maxCpc > 0 && updated.cpc > strategy.maxCpc) {
-      suppressionReasons.push(`CPC $${updated.cpc} above max $${strategy.maxCpc}`);
+    if (strategy?.maxCpc !== null && strategy?.maxCpc !== undefined && strategy.maxCpc > 0 && kw.cpc > strategy.maxCpc) {
+      suppressionReasons.push(`CPC $${kw.cpc} above max $${strategy.maxCpc}`);
     }
 
     if (suppressionReasons.length > 0) {
-      newSuppressed.push({ ...updated, suppressionReasons });
+      newSuppressed.push({ ...kw, suppressionReasons });
     } else {
-      if (!qualityAdjustedKeys.has(key)) {
-        const quality = getKeywordQualityScore(updated);
-        updated.qualityScore = quality.score;
-        updated.qualityRating = quality.rating;
-      }
-      newSelected.push({ ...updated, suppressionReasons: [] });
+      newSelected.push({ ...kw, suppressionReasons: [] });
     }
   }
 
-  newSelected.sort((a, b) => (b.qualityScore ?? 0) - (a.qualityScore ?? 0));
+  const dedupedSelected = dedupeSeedKeywords(newSelected);
+  dedupedSelected.sort((a, b) => (b.qualityScore ?? 0) - (a.qualityScore ?? 0));
+
+  return { selected: dedupedSelected, suppressed: newSuppressed };
+}
+
+// --- Legacy single-call function (kept for backward compat) ---
+export async function enhanceWithAi(
+  selected: SeedKeyword[],
+  suppressed: SuppressedKeyword[],
+  services: string[],
+  targetDomain: string,
+  strategy: CampaignStrategy | null,
+  apiKey: string,
+  onProgress?: (progress: AiEnhanceProgress) => void,
+): Promise<AiEnhanceResult> {
+  const allKeywords = [...selected, ...suppressed];
+
+  onProgress?.({ phase: 'intent', status: 'running', message: 'Classifying intent...' });
+  const intentResult = await runIntentPhase(allKeywords, services, targetDomain, apiKey);
+
+  onProgress?.({ phase: 'themes', status: 'running', message: 'Clustering themes...' });
+  const themesResult = await runThemesPhase(intentResult.keywords, services, apiKey);
+
+  onProgress?.({ phase: 'quality', status: 'running', message: 'Adjusting quality scores...' });
+  const qualityResult = await runQualityPhase(themesResult.keywords, services, targetDomain, strategy, apiKey);
+
+  onProgress?.({ phase: 'merging', status: 'running', message: 'Reclassifying keywords...' });
+  const { selected: finalSelected, suppressed: finalSuppressed } = mergeAndFilter(qualityResult.keywords, strategy);
+
   onProgress?.({ phase: 'done', status: 'done', message: 'Enhancement complete' });
 
   return {
-    keywords: newSelected,
-    suppressed: newSuppressed,
-    stats: { model, intentChanges, themesReassigned, negativesReclassified, qualityAdjustments, totalTokens },
+    keywords: finalSelected,
+    suppressed: finalSuppressed,
+    stats: {
+      model: intentResult.stats.model || themesResult.stats.model || qualityResult.stats.model,
+      intentChanges: intentResult.stats.intentChanges,
+      themesReassigned: themesResult.stats.themesReassigned,
+      negativesReclassified: intentResult.stats.negativesReclassified,
+      qualityAdjustments: qualityResult.stats.qualityAdjustments,
+      totalTokens: intentResult.stats.totalTokens + themesResult.stats.totalTokens + qualityResult.stats.totalTokens,
+    },
   };
 }
