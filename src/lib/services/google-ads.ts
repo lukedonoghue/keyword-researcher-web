@@ -337,6 +337,66 @@ export class GoogleAdsService {
     return this.normalizeKeywordIdeas(response);
   }
 
+  async generateKeywordIdeasDebug(
+    seedKeywords: string[],
+    targetUrl: string,
+    languageId: string = '1000',
+    geoTargetIds: string[] = ['2840']
+  ): Promise<{ normalized: KeywordMetric[]; rawSample: unknown[]; rawRowCount: number; responseType: string }> {
+    if (seedKeywords.length === 0 && !targetUrl) {
+      throw new Error('No seed keywords or target URL was provided.');
+    }
+
+    const customer = await this.getCustomer();
+    const topSeeds = seedKeywords.filter(Boolean).slice(0, 20);
+    const request: Record<string, unknown> = {
+      customer_id: this.customerId,
+      language: `languageConstants/${languageId}`,
+      geo_target_constants: geoTargetIds.map((id) => `geoTargetConstants/${id}`),
+      keyword_plan_network: enums.KeywordPlanNetwork.GOOGLE_SEARCH,
+      include_adult_keywords: false,
+      page_size: 20,
+    };
+
+    if (topSeeds.length > 0 && targetUrl) {
+      request.keyword_and_url_seed = { keywords: topSeeds, url: targetUrl };
+    } else if (topSeeds.length > 0) {
+      request.keyword_seed = { keywords: topSeeds };
+    } else {
+      request.url_seed = { url: targetUrl };
+    }
+
+    const response = await this.withTimeout(
+      customer.keywordPlanIdeas.generateKeywordIdeas(
+        request as unknown as Parameters<typeof customer.keywordPlanIdeas.generateKeywordIdeas>[0]
+      ),
+      GoogleAdsService.REQUEST_TIMEOUT_MS,
+      'Google Ads keyword idea request timed out.',
+    );
+
+    const responseRecord = this.asRecord(response);
+    const rows = Array.isArray(responseRecord.results)
+      ? responseRecord.results
+      : Array.isArray(response)
+        ? (response as unknown[])
+        : [];
+
+    // Capture first 5 raw rows with full structure
+    const rawSample = rows.slice(0, 5).map((item) => {
+      try { return JSON.parse(JSON.stringify(item)); }
+      catch { return { _error: 'not serializable', keys: Object.keys(this.asRecord(item)) }; }
+    });
+
+    const normalized = this.normalizeKeywordIdeas(response);
+
+    return {
+      normalized,
+      rawSample,
+      rawRowCount: rows.length,
+      responseType: Array.isArray(response) ? 'array' : typeof response,
+    };
+  }
+
   async createCampaignStructure(
     campaigns: CampaignStructureV2[],
     options: {
