@@ -8,7 +8,7 @@ import { Sun, Moon } from 'lucide-react';
 
 export function Header() {
   const { authenticated, customerId, logout } = useAuth();
-  const { theme, toggleTheme } = useTheme();
+  const { theme, mounted, toggleTheme } = useTheme();
 
   return (
     <header className="border-b border-border bg-card">
@@ -16,7 +16,7 @@ export function Header() {
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2">
             <Image
-              src={theme === 'dark' ? '/grow-my-ads-logo-alt.png' : '/grow-my-ads-logo.png'}
+              src={mounted && theme === 'dark' ? '/grow-my-ads-logo-alt.png' : '/grow-my-ads-logo.png'}
               alt="Grow My Ads"
               width={120}
               height={28}
@@ -35,7 +35,7 @@ export function Header() {
         </div>
         <div className="flex items-center gap-2">
           <Button variant="ghost" size="sm" onClick={toggleTheme} className="h-7 w-7 p-0">
-            {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+            {mounted && theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
           </Button>
           {authenticated && (
             <Button variant="ghost" size="sm" onClick={logout} className="h-7 text-xs">

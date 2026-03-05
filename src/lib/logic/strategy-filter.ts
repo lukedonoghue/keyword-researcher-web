@@ -95,7 +95,7 @@ export function buildCampaignStrategyDefaults(): CampaignStrategy {
     goal: 'conversions',
     monthlyBudget: 2000,
     minVolume: 50,
-    maxCpc: 12,
+    maxCpc: null,
     minAdGroupKeywords: 3,
     maxAdGroupKeywords: 20,
     focusHighIntent: true,

@@ -22,13 +22,13 @@ const presets: {
     label: 'Conservative',
     description: 'Lower spend, high-intent only',
     icon: Shield,
-    values: { monthlyBudget: 1000, minVolume: 100, maxCpc: 8, focusHighIntent: true, includeInformational: false },
+    values: { monthlyBudget: 1000, minVolume: 100, maxCpc: null, focusHighIntent: true, includeInformational: false },
   },
   {
     label: 'Balanced',
     description: 'Recommended defaults',
     icon: Target,
-    values: { monthlyBudget: 2000, minVolume: 50, maxCpc: 12, focusHighIntent: true, includeInformational: false },
+    values: { monthlyBudget: 2000, minVolume: 50, maxCpc: null, focusHighIntent: true, includeInformational: false },
   },
   {
     label: 'Aggressive',
@@ -115,28 +115,15 @@ export function StepStrategy() {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <Label className="text-xs">Max CPC ($)</Label>
-              <Input
-                type="number"
-                value={strategy.maxCpc ?? ''}
-                onChange={(e) => update({ maxCpc: e.target.value ? Number(e.target.value) : null })}
-                placeholder="No limit"
-                className="h-8 text-xs"
-              />
-              <p className="text-[11px] text-muted-foreground">Maximum you&apos;ll pay per click. Leave empty for no limit.</p>
-            </div>
-            <div className="space-y-1">
-              <Label className="text-xs">Min Search Volume</Label>
-              <Input
-                type="number"
-                value={strategy.minVolume}
-                onChange={(e) => update({ minVolume: Number(e.target.value) })}
-                className="h-8 text-xs"
-              />
-              <p className="text-[11px] text-muted-foreground">Minimum monthly searches. Lower = more keywords.</p>
-            </div>
+          <div className="space-y-1">
+            <Label className="text-xs">Min Search Volume</Label>
+            <Input
+              type="number"
+              value={strategy.minVolume}
+              onChange={(e) => update({ minVolume: Number(e.target.value) })}
+              className="h-8 text-xs w-1/2"
+            />
+            <p className="text-[11px] text-muted-foreground">Minimum monthly searches. Lower = more keywords.</p>
           </div>
         </CardContent>
       </Card>

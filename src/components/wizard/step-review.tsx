@@ -50,6 +50,7 @@ export function StepReview() {
 
   const [intentFilter, setIntentFilter] = useState<IntentFilter>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [maxCpcFilter, setMaxCpcFilter] = useState<number | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>('volume');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
   const [removedIndices, setRemovedIndices] = useState<Set<number>>(() => new Set());
@@ -129,6 +130,11 @@ export function StepReview() {
       result = result.filter(({ kw }) => kw.text.toLowerCase().includes(q));
     }
 
+    // Max CPC filter
+    if (maxCpcFilter !== null && maxCpcFilter > 0) {
+      result = result.filter(({ kw }) => kw.cpc <= maxCpcFilter);
+    }
+
     // Sorting
     result.sort((a, b) => {
       const dir = sortDir === 'asc' ? 1 : -1;
@@ -152,11 +158,21 @@ export function StepReview() {
     });
 
     return result;
-  }, [keywords, removedIndices, intentFilter, searchQuery, sortKey, sortDir]);
+  }, [keywords, removedIndices, intentFilter, searchQuery, maxCpcFilter, sortKey, sortDir]);
 
-  // Stats computed from kept (non-removed) keywords
+  // Keywords after CPC filter (for stats and campaign building)
+  const cpcFilteredKeywords = useMemo(
+    () => maxCpcFilter !== null && maxCpcFilter > 0
+      ? keptKeywords.filter(kw => kw.cpc <= maxCpcFilter)
+      : keptKeywords,
+    [keptKeywords, maxCpcFilter],
+  );
+
+  const cpcHiddenCount = keptKeywords.length - cpcFilteredKeywords.length;
+
+  // Stats computed from CPC-filtered keywords
   const stats = useMemo(() => {
-    const list = keptKeywords;
+    const list = cpcFilteredKeywords;
     const count = list.length;
     const budget = calculateRecommendedBudget(list);
 
@@ -177,20 +193,20 @@ export function StepReview() {
     const dominantPct = count > 0 ? Math.round((dominantCount / count) * 100) : 0;
 
     return { count, avgCpc: budget.avgCpc, recommendedDaily: budget.recommendedDaily, recommendedMonthly: budget.recommendedMonthly, dominantIntent, dominantPct };
-  }, [keptKeywords]);
+  }, [cpcFilteredKeywords]);
 
   const handleNext = () => {
-    // Persist only the kept keywords before navigating
+    // Persist only the kept + CPC-filtered keywords before navigating
     if (state.enhancedKeywords.length > 0) {
       dispatch({
         type: 'SET_ENHANCED_KEYWORDS',
-        keywords: keptKeywords,
+        keywords: cpcFilteredKeywords,
         suppressed: state.enhancedSuppressed,
       });
     } else {
       dispatch({
         type: 'SET_FILTERED_KEYWORDS',
-        selected: keptKeywords,
+        selected: cpcFilteredKeywords,
         suppressed: state.suppressedKeywords,
       });
     }
@@ -214,7 +230,7 @@ export function StepReview() {
         <div>
           <h2 className="text-base font-semibold">Keyword Review</h2>
           <p className="text-xs text-muted-foreground mt-0.5">
-            {keptKeywords.length} of {keywords.length} keywords selected for campaign building.
+            {cpcFilteredKeywords.length} of {keywords.length} keywords selected for campaign building.
           </p>
         </div>
         <div className="flex gap-2">
@@ -279,6 +295,24 @@ export function StepReview() {
             {f.label}
           </button>
         ))}
+        <div className="flex items-center gap-1.5 ml-2">
+          <span className="text-[11px] text-muted-foreground whitespace-nowrap">Max CPC</span>
+          <div className="relative">
+            <span className="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">$</span>
+            <Input
+              type="number"
+              min={0}
+              step={0.5}
+              placeholder="—"
+              value={maxCpcFilter ?? ''}
+              onChange={e => {
+                const val = e.target.value;
+                setMaxCpcFilter(val === '' ? null : parseFloat(val) || null);
+              }}
+              className="h-7 w-20 pl-5 text-xs tabular-nums"
+            />
+          </div>
+        </div>
         <div className="relative ml-auto">
           <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
           <Input
@@ -289,6 +323,13 @@ export function StepReview() {
           />
         </div>
       </div>
+
+      {/* CPC filter impact indicator */}
+      {cpcHiddenCount > 0 && maxCpcFilter !== null && (
+        <p className="text-[11px] text-muted-foreground">
+          Hiding {cpcHiddenCount} keyword{cpcHiddenCount !== 1 ? 's' : ''} with CPC above ${maxCpcFilter.toFixed(2)}
+        </p>
+      )}
 
       {/* Table */}
       <Card>
