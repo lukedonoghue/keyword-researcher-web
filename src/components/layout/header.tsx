@@ -9,6 +9,9 @@ import { Sun, Moon } from 'lucide-react';
 export function Header() {
   const { authenticated, customerId, logout } = useAuth();
   const { theme, mounted, toggleTheme } = useTheme();
+  const appVersion = process.env.NEXT_PUBLIC_APP_VERSION ?? '0.0.0';
+  const commitSha = process.env.NEXT_PUBLIC_APP_COMMIT_SHA ?? '';
+  const versionLabel = commitSha ? `v${appVersion}-${commitSha}` : `v${appVersion}`;
 
   return (
     <header className="border-b border-border bg-card">
@@ -34,6 +37,9 @@ export function Header() {
           )}
         </div>
         <div className="flex items-center gap-2">
+          <span className="rounded border border-border px-2 py-0.5 text-[10px] text-muted-foreground font-mono leading-none">
+            {versionLabel}
+          </span>
           <Button variant="ghost" size="sm" onClick={toggleTheme} className="h-7 w-7 p-0">
             {mounted && theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
           </Button>
