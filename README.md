@@ -1,36 +1,83 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Keyword Researcher (Grow My Ads)
 
-## Getting Started
+AI-assisted Google Ads workflow for:
 
-First, run the development server:
+1. Discovering services from a business website.
+2. Researching keyword ideas (Google Ads + competitor context).
+3. Applying strategy filters and optional AI enhancement.
+4. Building campaign/ad-group/keyword structure.
+5. Exporting usable CSV files for Google Ads Editor and analysis.
+
+## Core Objective
+
+Given a target website and market, produce campaign output that is:
+
+1. Logically consistent with user selections (services, geo, strategy, negative keyword choices).
+2. Internally consistent across steps (research, review, campaign build, export/import).
+3. Immediately usable in Google Ads workflows (Editor import or direct API creation).
+
+## Stack
+
+- Next.js App Router
+- React + TypeScript
+- Google Ads API
+- OpenRouter (Perplexity + model-based enhancement)
+- `iron-session` for auth session state
+
+## Local Setup
+
+Install dependencies:
+
+```bash
+npm install
+```
+
+Run dev server:
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Lint:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+npm run lint
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Build:
 
-## Learn More
+```bash
+npm run build
+```
 
-To learn more about Next.js, take a look at the following resources:
+## Required Environment Variables
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Server-side:
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- `SESSION_SECRET` (must be at least 32 characters)
+- `GOOGLE_ADS_DEVELOPER_TOKEN`
+- `GOOGLE_ADS_CLIENT_ID`
+- `GOOGLE_ADS_CLIENT_SECRET`
 
-## Deploy on Vercel
+Optional (deployment and token compatibility):
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+- `NEXT_PUBLIC_APP_URL`
+- `GOOGLE_ADS_ORIG_CLIENT_ID`
+- `GOOGLE_ADS_ORIG_CLIENT_SECRET`
+- `GOOGLE_ADS_REFRESH_TOKEN` (for `/api/auth/dev-login`)
+- `GOOGLE_ADS_CUSTOMER_ID` (for `/api/auth/dev-login`)
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+User-provided in app:
+
+- OpenRouter API key (entered in Setup step and stored in browser localStorage)
+
+## Output Files
+
+- `google_ads_editor_import.csv`: Editor-compatible campaign/ad-group/keyword + negatives export.
+- `campaign_analysis.csv`: Extended metrics/prioritization export for review and planning.
+
+## Notes
+
+- Campaigns are built as paused by default for safe review.
+- Negative keyword selections in Review are treated as user intent and carried into campaign generation.
+- Multi-location geo targeting is preserved for both research and direct Google Ads import.

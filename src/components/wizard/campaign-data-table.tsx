@@ -361,7 +361,7 @@ export function CampaignDataTable({ campaigns }: { campaigns: CampaignStructureV
       vis[key] = colVisibility[key] ?? !(key in defaultColumnVisibility);
     }
     return vis;
-  }, [colVisibility]);
+  }, [allColumnKeys, colVisibility]);
 
   const columnLabels: Record<string, string> = {
     campaign: 'Campaign',

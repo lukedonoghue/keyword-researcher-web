@@ -59,7 +59,7 @@ export function StepReview() {
   const suppressedKeywords = state.enhancedSuppressed.length > 0 ? state.enhancedSuppressed : state.suppressedKeywords;
 
   // Combine suppressed keywords + competitor brands as negative candidates
-  const negativeCandiates = useMemo(() => {
+  const negativeCandidates = useMemo(() => {
     const items: { text: string; reasons: string[] }[] = [];
     for (const kw of suppressedKeywords) {
       items.push({ text: kw.text, reasons: kw.suppressionReasons });
@@ -73,6 +73,20 @@ export function StepReview() {
     }
     return items;
   }, [suppressedKeywords, state.competitorNames]);
+
+  const selectedNegativeKeywords = useMemo(() => {
+    const seen = new Set<string>();
+    const selected: string[] = [];
+    for (const [idx, item] of negativeCandidates.entries()) {
+      if (excludedNegatives.has(idx)) continue;
+      const keyword = item.text.trim();
+      const key = keyword.toLowerCase();
+      if (!keyword || seen.has(key)) continue;
+      seen.add(key);
+      selected.push(keyword);
+    }
+    return selected;
+  }, [negativeCandidates, excludedNegatives]);
 
   const handleSort = (key: SortKey) => {
     if (sortKey === key) {
@@ -180,16 +194,15 @@ export function StepReview() {
         suppressed: state.suppressedKeywords,
       });
     }
+    dispatch({ type: 'SET_REVIEW_NEGATIVE_KEYWORDS', keywords: selectedNegativeKeywords });
     dispatch({ type: 'SET_STEP', step: 'campaign' });
   };
 
-  const SortIndicator = ({ column }: { column: SortKey }) => {
+  const renderSortIndicator = (column: SortKey) => {
     if (sortKey !== column) return null;
-    return sortDir === 'asc' ? (
-      <ChevronUp className="inline h-3 w-3 ml-0.5" />
-    ) : (
-      <ChevronDown className="inline h-3 w-3 ml-0.5" />
-    );
+    return sortDir === 'asc'
+      ? <ChevronUp className="inline h-3 w-3 ml-0.5" />
+      : <ChevronDown className="inline h-3 w-3 ml-0.5" />;
   };
 
   const sortableHeaderClass = 'text-[11px] font-medium cursor-pointer select-none hover:text-foreground transition-colors';
@@ -288,31 +301,31 @@ export function StepReview() {
                     className={`${sortableHeaderClass} w-[300px]`}
                     onClick={() => handleSort('text')}
                   >
-                    Keyword <SortIndicator column="text" />
+                    Keyword {renderSortIndicator('text')}
                   </TableHead>
                   <TableHead
                     className={`${sortableHeaderClass} text-right w-[80px]`}
                     onClick={() => handleSort('volume')}
                   >
-                    Volume <SortIndicator column="volume" />
+                    Volume {renderSortIndicator('volume')}
                   </TableHead>
                   <TableHead
                     className={`${sortableHeaderClass} text-right w-[70px]`}
                     onClick={() => handleSort('cpc')}
                   >
-                    CPC <SortIndicator column="cpc" />
+                    CPC {renderSortIndicator('cpc')}
                   </TableHead>
                   <TableHead
                     className={`${sortableHeaderClass} w-[100px]`}
                     onClick={() => handleSort('intent')}
                   >
-                    Intent <SortIndicator column="intent" />
+                    Intent {renderSortIndicator('intent')}
                   </TableHead>
                   <TableHead
                     className={`${sortableHeaderClass} w-[60px]`}
                     onClick={() => handleSort('quality')}
                   >
-                    Quality <SortIndicator column="quality" />
+                    Quality {renderSortIndicator('quality')}
                   </TableHead>
                   <TableHead className="text-[11px] font-medium w-[80px]">Source</TableHead>
                   <TableHead className="text-[11px] font-medium w-[40px]" />
@@ -402,7 +415,7 @@ export function StepReview() {
       )}
 
       {/* Suppressed keywords + competitor brands as negative candidates (#8) */}
-      {negativeCandiates.length > 0 && (
+      {negativeCandidates.length > 0 && (
         <Card>
           <CardContent className="p-0">
             <button
@@ -413,7 +426,7 @@ export function StepReview() {
               <ChevronRight className={`h-3.5 w-3.5 text-muted-foreground transition-transform ${showSuppressed ? 'rotate-90' : ''}`} />
               <span className="text-xs font-medium">Suggested Negative Keywords</span>
               <Badge variant="secondary" className="text-[10px] ml-auto">
-                {negativeCandiates.length}
+                {selectedNegativeKeywords.length} selected
               </Badge>
             </button>
             {showSuppressed && (
@@ -428,7 +441,7 @@ export function StepReview() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {negativeCandiates.map((item, idx) => (
+                      {negativeCandidates.map((item, idx) => (
                         <TableRow key={`${item.text}-${idx}`} className="h-8">
                           <TableCell className="py-1">
                             <Checkbox

@@ -31,6 +31,11 @@ type ResearchCompetitorsResponse = {
   competitors?: Array<{ name?: string; domain?: string; description?: string }>;
 };
 
+type ResearchKeywordsResult = {
+  keywords: SeedKeyword[];
+  competitorNames: string[];
+};
+
 type GoogleKeywordApi = {
   text?: string;
   volume?: number;
@@ -126,7 +131,7 @@ export function useWorkflowData() {
     }
   }, [dispatch, openrouterApiKey]);
 
-  const researchKeywords = useCallback(async (onPhase?: (phase: 'competitors' | 'google') => void) => {
+  const researchKeywords = useCallback(async (onPhase?: (phase: 'competitors' | 'google') => void): Promise<ResearchKeywordsResult> => {
     dispatch({ type: 'SET_PROCESSING', isProcessing: true });
     dispatch({ type: 'SET_ERROR', error: null });
     try {
@@ -183,7 +188,7 @@ export function useWorkflowData() {
       const cities = state.detectedServiceArea?.cities ?? [];
       const topCities = cities.slice(0, 3);
 
-      let googleKeywords: SeedKeyword[] = [];
+      const googleKeywords: SeedKeyword[] = [];
       for (const service of state.selectedServices) {
         const discoverySeeds = discoveredSvcMap.get(service) ?? [];
         const perplexityForService = (perplexityByService.get(service) ?? []).slice(0, 5);
@@ -244,7 +249,7 @@ export function useWorkflowData() {
       // Only Google Ads data in the final results — no Perplexity or fabricated location variants
       const allKeywords = [...googleKeywords];
       dispatch({ type: 'SET_SEED_KEYWORDS', keywords: allKeywords });
-      return allKeywords;
+      return { keywords: allKeywords, competitorNames };
     } catch (err: unknown) {
       dispatch({ type: 'SET_ERROR', error: getErrorMessage(err, 'Failed to research keywords') });
       throw err;
@@ -372,6 +377,7 @@ export function useWorkflowData() {
             minAdGroupKeywords: state.strategy.minAdGroupKeywords,
             maxAdGroupKeywords: state.strategy.maxAdGroupKeywords,
           },
+          manualNegativeKeywords: state.reviewNegativeKeywords,
           targetDomain: state.targetDomain,
         }),
       });

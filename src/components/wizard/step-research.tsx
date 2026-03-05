@@ -10,7 +10,6 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { enrichSeedKeywordsWithSignals, applyStrategyFilter } from '@/lib/logic/strategy-filter';
 import { mergeKeywordsWithGoogleAdsAuthority } from '@/lib/logic/keyword-merge';
 import { calculateRecommendedBudget } from '@/lib/logic/budget-calculator';
-import type { SeedKeyword } from '@/lib/types/index';
 
 export function StepResearch() {
   const { state, dispatch } = useWorkflow();
@@ -23,14 +22,14 @@ export function StepResearch() {
     startedRef.current = true;
     try {
       setPhase('competitors');
-      const allKeywords = await researchKeywords((nextPhase) => setPhase(nextPhase));
+      const { keywords: allKeywords, competitorNames } = await researchKeywords((nextPhase) => setPhase(nextPhase));
 
       setPhase('merging');
       const merged = mergeKeywordsWithGoogleAdsAuthority([allKeywords]);
 
       setPhase('filtering');
       const enriched = enrichSeedKeywordsWithSignals(merged);
-      const { selected, suppressed } = applyStrategyFilter(enriched, state.strategy, state.competitorNames);
+      const { selected, suppressed } = applyStrategyFilter(enriched, state.strategy, competitorNames);
 
       dispatch({ type: 'SET_SEED_KEYWORDS', keywords: merged });
       dispatch({ type: 'SET_FILTERED_KEYWORDS', selected, suppressed });
@@ -38,7 +37,7 @@ export function StepResearch() {
     } catch {
       // Error handled by useWorkflowData
     }
-  }, [dispatch, researchKeywords, state.strategy, state.competitorNames]);
+  }, [dispatch, researchKeywords, state.strategy]);
 
   useEffect(() => {
     if (startedRef.current || state.seedKeywords.length > 0) {

@@ -38,11 +38,6 @@ type ServiceMatch = {
   score: number;
 };
 
-type ThemeBucket = {
-  theme: string;
-  keywords: KeywordMetric[];
-};
-
 export interface CampaignBuildOptions {
   minAdGroupKeywords?: number;
   maxAdGroupKeywords?: number;
@@ -193,8 +188,7 @@ export class CampaignBuilder {
             const key = kw.keyword.toLowerCase().trim();
             if (seen.has(key)) continue;
             seen.add(key);
-            // Count by intent — infer from sub-theme name if no direct field
-            const intent = this.inferIntentFromSubTheme(st.name);
+            const intent = kw.intent ?? this.inferIntentFromSubTheme(st.name);
             intentCounts[intent]++;
             cpcSum += kw.cpc;
             volumeSum += kw.volume;

@@ -19,8 +19,6 @@ const STEP_DESCRIPTIONS: Record<WizardStep, string> = {
   campaign: 'Build & export',
 };
 
-const PHASE_BREAKS = new Set([4, 6]); // Dividers after step 4 (Strategy) and step 6 (Enhance)
-
 const stepIndex = (step: WizardStep) => WIZARD_STEPS.findIndex((s) => s.id === step);
 
 export function StepIndicator() {

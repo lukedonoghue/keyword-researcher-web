@@ -199,7 +199,9 @@ export function StepCampaign() {
           campaigns: state.campaigns,
           dailyBudgetMicros: Math.round(parseFloat(dailyBudget) * 1_000_000),
           biddingStrategy: 'MAXIMIZE_CONVERSIONS',
-          geoTargetIds: [state.geoTargetId],
+          geoTargetIds: state.geoTargets.length > 0
+            ? state.geoTargets.map((target) => target.id)
+            : [state.geoTargetId],
         }),
       });
       if (!res.ok) {
@@ -215,7 +217,7 @@ export function StepCampaign() {
     } finally {
       setImporting(false);
     }
-  }, [state.campaigns, state.geoTargetId, dailyBudget]);
+  }, [state.campaigns, state.geoTargetId, state.geoTargets, dailyBudget]);
 
   const handleStartEditing = useCallback((idx: number) => {
     setEditingCampaignIdx(idx);

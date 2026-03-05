@@ -273,11 +273,11 @@ export function mergeAndFilter(
     if (kw.isNegativeCandidate && strategy && !strategy.includeNegativeCandidates) {
       suppressionReasons.push('AI flagged as negative/irrelevant');
     }
-    if (kw.intent === 'navigational' && strategy?.focusHighIntent) {
-      suppressionReasons.push('Navigational intent filtered for conversion focus');
-    }
-    if (kw.intent === 'informational' && strategy && !strategy.includeInformational && strategy.focusHighIntent) {
+    if (kw.intent === 'informational' && strategy && !strategy.includeInformational) {
       suppressionReasons.push('Informational intent filtered out by strategy');
+    }
+    if (strategy?.focusHighIntent && kw.intent !== 'transactional' && kw.intent !== 'commercial') {
+      suppressionReasons.push('Low-intent keyword filtered for conversion-focused strategy');
     }
     if (strategy && kw.volume < strategy.minVolume) {
       suppressionReasons.push(`Volume ${kw.volume} below minimum ${strategy.minVolume}`);

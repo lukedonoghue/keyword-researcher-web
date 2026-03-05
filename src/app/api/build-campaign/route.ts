@@ -24,6 +24,7 @@ export async function POST(request: NextRequest) {
       keywords?: CampaignKeywordMetric[];
       allKeywords?: Array<{ text: string; volume: number; cpc: number }>;
       competitorNames?: string[];
+      manualNegativeKeywords?: string[];
       options?: { minAdGroupKeywords?: number; maxAdGroupKeywords?: number };
       targetDomain?: string;
     };
@@ -31,6 +32,21 @@ export async function POST(request: NextRequest) {
     const keywords = Array.isArray(payload.keywords) ? payload.keywords : [];
     const allKeywords = Array.isArray(payload.allKeywords) ? payload.allKeywords : [];
     const competitorNames = Array.isArray(payload.competitorNames) ? payload.competitorNames : [];
+    const manualNegativeKeywords = Array.isArray(payload.manualNegativeKeywords)
+      ? (() => {
+        const seen = new Set<string>();
+        const out: string[] = [];
+        for (const value of payload.manualNegativeKeywords) {
+          if (typeof value !== 'string') continue;
+          const trimmed = value.trim();
+          const key = trimmed.toLowerCase();
+          if (!trimmed || seen.has(key)) continue;
+          seen.add(key);
+          out.push(trimmed);
+        }
+        return out;
+      })()
+      : null;
     const options = payload.options ?? {};
 
     if (!services.length) {
@@ -73,12 +89,22 @@ export async function POST(request: NextRequest) {
       const thisKws = campaignKeywordSets.get(campaign.campaignName)!;
 
       // Shared negatives (competitor brands + navigational terms)
-      const sharedNegs = CampaignBuilder.buildNegativeKeywords(
-        allKeywords.length > 0 ? allKeywords : keywords,
-        keywords,
-        campaign.campaignName,
-        competitorNames,
-      );
+      const sharedNegs = manualNegativeKeywords !== null
+        ? manualNegativeKeywords
+          .filter((keyword) => !thisKws.has(keyword.toLowerCase()))
+          .map((keyword) => ({
+            campaign: campaign.campaignName,
+            adGroup: '',
+            keyword,
+            matchType: 'Phrase' as const,
+            status: 'Negative' as const,
+          }))
+        : CampaignBuilder.buildNegativeKeywords(
+          allKeywords.length > 0 ? allKeywords : keywords,
+          keywords,
+          campaign.campaignName,
+          competitorNames,
+        );
       negativeKeywords.push(...sharedNegs);
 
       // Cross-campaign negatives (other campaigns' keywords as negatives)
@@ -97,8 +123,16 @@ export async function POST(request: NextRequest) {
         }
       }
     }
+    const seenNegativeKeys = new Set<string>();
+    const dedupedNegativeKeywords = negativeKeywords.filter((item) => {
+      const normalized = item.keyword.toLowerCase().trim();
+      const key = `${item.campaign}|||${normalized}|||${item.matchType}`;
+      if (!normalized || seenNegativeKeys.has(key)) return false;
+      seenNegativeKeys.add(key);
+      return true;
+    });
 
-    return NextResponse.json({ campaigns, negativeKeywords });
+    return NextResponse.json({ campaigns, negativeKeywords: dedupedNegativeKeywords });
   } catch (error: unknown) {
     console.error('Error building campaign:', error);
     return NextResponse.json(

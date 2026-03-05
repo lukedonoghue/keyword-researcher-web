@@ -52,6 +52,7 @@ export type WorkflowState = {
   campaigns: CampaignStructureV2[];
   manualSeedKeywords: string[];
   competitorNames: string[];
+  reviewNegativeKeywords: string[];
   negativeKeywords: NegativeKeyword[];
   isProcessing: boolean;
   error: string | null;
@@ -96,6 +97,7 @@ const initialState: WorkflowState = {
   campaigns: [],
   manualSeedKeywords: [],
   competitorNames: [],
+  reviewNegativeKeywords: [],
   negativeKeywords: [],
   isProcessing: false,
   error: null,
@@ -110,6 +112,7 @@ function createDownstreamResearchReset() {
     enhancedSuppressed: [],
     campaigns: [],
     competitorNames: [],
+    reviewNegativeKeywords: [],
     negativeKeywords: [],
   };
 }
@@ -128,6 +131,7 @@ export type WorkflowAction =
   | { type: 'SET_CAMPAIGNS'; campaigns: CampaignStructureV2[] }
   | { type: 'SET_MANUAL_SEEDS'; keywords: string[] }
   | { type: 'SET_COMPETITOR_NAMES'; names: string[] }
+  | { type: 'SET_REVIEW_NEGATIVE_KEYWORDS'; keywords: string[] }
   | { type: 'SET_NEGATIVE_KEYWORDS'; negativeKeywords: NegativeKeyword[] }
   | { type: 'SET_PROCESSING'; isProcessing: boolean }
   | { type: 'SET_ERROR'; error: string | null }
@@ -208,15 +212,31 @@ function workflowReducer(state: WorkflowState, action: WorkflowAction): Workflow
     case 'SET_SEED_KEYWORDS':
       return { ...state, seedKeywords: action.keywords };
     case 'SET_FILTERED_KEYWORDS':
-      return { ...state, selectedKeywords: action.selected, suppressedKeywords: action.suppressed };
+      return {
+        ...state,
+        selectedKeywords: action.selected,
+        suppressedKeywords: action.suppressed,
+        campaigns: [],
+        reviewNegativeKeywords: [],
+        negativeKeywords: [],
+      };
     case 'SET_ENHANCED_KEYWORDS':
-      return { ...state, enhancedKeywords: action.keywords, enhancedSuppressed: action.suppressed };
+      return {
+        ...state,
+        enhancedKeywords: action.keywords,
+        enhancedSuppressed: action.suppressed,
+        campaigns: [],
+        reviewNegativeKeywords: [],
+        negativeKeywords: [],
+      };
     case 'SET_CAMPAIGNS':
       return { ...state, campaigns: action.campaigns };
     case 'SET_MANUAL_SEEDS':
       return { ...state, manualSeedKeywords: action.keywords, ...createDownstreamResearchReset() };
     case 'SET_COMPETITOR_NAMES':
       return { ...state, competitorNames: action.names };
+    case 'SET_REVIEW_NEGATIVE_KEYWORDS':
+      return { ...state, reviewNegativeKeywords: action.keywords, campaigns: [], negativeKeywords: [] };
     case 'SET_NEGATIVE_KEYWORDS':
       return { ...state, negativeKeywords: action.negativeKeywords };
     case 'SET_PROCESSING':

@@ -125,7 +125,7 @@ export function StepStrategy() {
                 placeholder="No limit"
                 className="h-8 text-xs"
               />
-              <p className="text-[11px] text-muted-foreground">Maximum you'll pay per click. Leave empty for no limit.</p>
+              <p className="text-[11px] text-muted-foreground">Maximum you&apos;ll pay per click. Leave empty for no limit.</p>
             </div>
             <div className="space-y-1">
               <Label className="text-xs">Min Search Volume</Label>

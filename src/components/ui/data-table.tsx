@@ -49,9 +49,11 @@ export function DataTable<TData, TValue>({
 
   // Initialize all groups as expanded
   React.useEffect(() => {
-    if (groupedData && groupedData.length > 0 && expandedGroups.size === 0) {
-      setExpandedGroups(new Set(groupedData.map((g) => `${g.campaign}|||${g.adGroup}`)));
-    }
+    if (!groupedData || groupedData.length === 0) return;
+    setExpandedGroups((prev) => {
+      if (prev.size > 0) return prev;
+      return new Set(groupedData.map((g) => `${g.campaign}|||${g.adGroup}`));
+    });
   }, [groupedData]);
 
   const table = useReactTable({
