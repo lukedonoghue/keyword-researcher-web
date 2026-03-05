@@ -38,6 +38,16 @@ export async function POST(request: NextRequest) {
       languageId,
       geoTargetIds,
     );
+
+    // Debug: log CPC distribution to verify API returns distinct values
+    const cpcDistribution = new Map<string, number>();
+    for (const kw of keywords) {
+      const key = `${kw.cpc.toFixed(2)}|${kw.volume}`;
+      cpcDistribution.set(key, (cpcDistribution.get(key) || 0) + 1);
+    }
+    console.log(`[keywords] ${keywords.length} results, ${cpcDistribution.size} distinct cpc|vol combos:`,
+      [...cpcDistribution.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10).map(([k, v]) => `${k}(×${v})`).join(', '));
+
     return NextResponse.json({ keywords });
   } catch (error: unknown) {
     console.error('Error generating keywords:', error);

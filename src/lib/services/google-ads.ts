@@ -148,6 +148,23 @@ export class GoogleAdsService {
         ? response
         : [];
 
+    // Debug: log raw shape of first 3 rows
+    if (rows.length > 0) {
+      console.log(`[normalizeKeywordIdeas] ${rows.length} raw rows. First row keys:`, Object.keys(this.asRecord(rows[0])));
+      for (let i = 0; i < Math.min(3, rows.length); i++) {
+        const row = this.asRecord(rows[i]);
+        const metrics = this.asRecord(row.keyword_idea_metrics || row.keywordIdeaMetrics || row.metrics);
+        const kw = this.asRecord(row.keyword);
+        console.log(`[normalizeKeywordIdeas] row[${i}]:`, {
+          text: row.text ?? kw.text,
+          metricsKeys: Object.keys(metrics),
+          avgMonthlySearches: metrics.avg_monthly_searches ?? metrics.avgMonthlySearches,
+          lowTopBid: metrics.low_top_of_page_bid_micros ?? metrics.lowTopOfPageBidMicros,
+          highTopBid: metrics.high_top_of_page_bid_micros ?? metrics.highTopOfPageBidMicros,
+        });
+      }
+    }
+
     return rows
       .map((item) => {
         const row = this.asRecord(item);
