@@ -11,13 +11,11 @@ import { GEO_CONSTANTS } from '@/lib/data/geoConstants';
 import { formatServiceArea } from '@/lib/services/geo-detector';
 import type { GeoLocationSuggestion } from '@/lib/types/geo';
 
-type GeoSearchResult = GeoLocationSuggestion & { searching?: boolean };
-
 export function StepGeo() {
   const { state, dispatch } = useWorkflow();
   const [manualCountry, setManualCountry] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<GeoSearchResult[]>([]);
+  const [searchResults, setSearchResults] = useState<GeoLocationSuggestion[]>([]);
   const [selectedLocations, setSelectedLocations] = useState<GeoLocationSuggestion[]>(state.geoTargets);
   const [isSearching, setIsSearching] = useState(false);
   const [showResults, setShowResults] = useState(false);
@@ -91,25 +89,25 @@ export function StepGeo() {
     autoPopulatedRef.current = true;
 
     async function autoSearch() {
-      const results: GeoLocationSuggestion[] = [];
-      for (const city of cities) {
-        try {
+      const settled = await Promise.allSettled(
+        cities.map(async (city) => {
           const res = await fetch('/api/google-ads/geo-search', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ query: city, countryCode: selectedCountry }),
           });
-          if (res.ok) {
-            const data = await res.json() as { locations: GeoLocationSuggestion[] };
-            const locations = Array.isArray(data.locations) ? data.locations : [];
-            // Pick the first City-type result, or the first result
-            const match = locations.find((l) => l.targetType === 'City') || locations[0];
-            if (match && !results.some((r) => r.id === match.id)) {
-              results.push(match);
-            }
-          }
-        } catch {
-          // skip failed lookups
+          if (!res.ok) return null;
+          const data = await res.json() as { locations: GeoLocationSuggestion[] };
+          const locations = Array.isArray(data.locations) ? data.locations : [];
+          return locations.find((l) => l.targetType === 'City') || locations[0] || null;
+        })
+      );
+      const seen = new Set<string>();
+      const results: GeoLocationSuggestion[] = [];
+      for (const r of settled) {
+        if (r.status === 'fulfilled' && r.value && !seen.has(r.value.id)) {
+          seen.add(r.value.id);
+          results.push(r.value);
         }
       }
       if (results.length > 0) {

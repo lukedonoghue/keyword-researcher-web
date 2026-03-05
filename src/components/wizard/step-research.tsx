@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useWorkflow } from '@/providers/workflow-provider';
 import { useWorkflowData } from '@/hooks/use-workflow-data';
 import { Button } from '@/components/ui/button';
@@ -10,6 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { enrichSeedKeywordsWithSignals, applyStrategyFilter } from '@/lib/logic/strategy-filter';
 import { mergeKeywordsWithGoogleAdsAuthority } from '@/lib/logic/keyword-merge';
 import { calculateRecommendedBudget } from '@/lib/logic/budget-calculator';
+import { PhaseRow } from './phase-row';
 
 export function StepResearch() {
   const { state, dispatch } = useWorkflow();
@@ -51,10 +52,12 @@ export function StepResearch() {
 
   const progressPercent = { competitors: 25, google: 50, merging: 75, filtering: 90, done: 100 }[phase];
 
-  const topKeywords = state.selectedKeywords
-    .slice()
-    .sort((a, b) => b.volume - a.volume)
-    .slice(0, 5);
+  const topKeywords = useMemo(() => {
+    return state.selectedKeywords
+      .slice()
+      .sort((a, b) => b.volume - a.volume)
+      .slice(0, 5);
+  }, [state.selectedKeywords]);
 
   return (
     <div className="space-y-4 max-w-xl">
@@ -196,25 +199,6 @@ export function StepResearch() {
           </Button>
         )}
       </div>
-    </div>
-  );
-}
-
-function PhaseRow({ label, active, done }: { label: string; active: boolean; done: boolean }) {
-  return (
-    <div className="flex items-center gap-2">
-      {done ? (
-        <svg width="12" height="12" viewBox="0 0 12 12" className="text-green-500">
-          <path d="M2.5 6L5 8.5L9.5 4" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" />
-        </svg>
-      ) : active ? (
-        <div className="h-3 w-3 animate-spin rounded-full border border-primary border-t-transparent" />
-      ) : (
-        <div className="h-3 w-3 rounded-full border border-border" />
-      )}
-      <span className={`text-xs ${active ? 'text-foreground font-medium' : done ? 'text-muted-foreground' : 'text-muted-foreground/60'}`}>
-        {label}
-      </span>
     </div>
   );
 }
