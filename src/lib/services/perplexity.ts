@@ -50,7 +50,8 @@ export class PerplexityService {
 
     const { data, usage } = await this.client.jsonPrompt<Partial<BusinessAnalysisResponse>>(
       systemPrompt,
-      `Analyze this website and identify their services, business type, and geographic service area: ${targetUrl}`
+      `Analyze this website and identify their services, business type, and geographic service area: ${targetUrl}`,
+      0,
     );
 
     const normalized = normalizeBusinessAnalysis(data);

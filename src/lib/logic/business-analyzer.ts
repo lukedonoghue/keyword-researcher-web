@@ -38,6 +38,13 @@ Return a JSON object with:
 - contextTerms: 3-5 industry-specific terms that help contextualize their business
 
 Focus on services that would make good Google Ads campaigns. Be specific — "PPC Management" not "Marketing".
+
+Service categorization rules:
+- Split services by customer type when relevant (e.g. "Residential Plumbing" vs "Commercial Plumbing")
+- Split services by distinct specialties (e.g. "Gutter Guard Installation" vs "Gutter Cleaning")
+- Each service should map to a distinct ad group with its own landing page
+- Order services from highest commercial value to lowest
+
 For serviceArea, look for location mentions in the content, contact pages, footer, service areas, etc.`;
 }
 

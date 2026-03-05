@@ -40,13 +40,14 @@ export class OpenRouterService {
     await new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  async chatCompletion(messages: ChatMessage[], jsonMode = false): Promise<ChatCompletionResult> {
+  async chatCompletion(messages: ChatMessage[], jsonMode = false, temperature?: number): Promise<ChatCompletionResult> {
     let lastError: unknown;
     const attempts = 3;
 
     for (let attempt = 1; attempt <= attempts; attempt++) {
       try {
         const body: Record<string, unknown> = { model: this.model, messages };
+        if (temperature !== undefined) body.temperature = temperature;
         const supportsJsonMode = !this.model.startsWith('perplexity/');
         if (jsonMode && supportsJsonMode) body.response_format = { type: 'json_object' };
 
@@ -93,13 +94,13 @@ export class OpenRouterService {
     throw lastError;
   }
 
-  async jsonPrompt<T>(systemPrompt: string, userPrompt: string): Promise<{ data: T; usage: ChatCompletionResult['usage'] }> {
+  async jsonPrompt<T>(systemPrompt: string, userPrompt: string, temperature?: number): Promise<{ data: T; usage: ChatCompletionResult['usage'] }> {
     const messages: ChatMessage[] = [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userPrompt },
     ];
 
-    const result = await this.chatCompletion(messages, true);
+    const result = await this.chatCompletion(messages, true, temperature);
     let raw = result.content.trim();
     if (raw.startsWith('```')) {
       raw = raw.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
