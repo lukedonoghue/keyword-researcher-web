@@ -5,6 +5,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider } from "@/providers/auth-provider";
 import { WorkflowProvider } from "@/providers/workflow-provider";
 import { ThemeProvider } from "@/providers/theme-provider";
+import packageJson from "../../package.json";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -21,6 +22,10 @@ export const metadata: Metadata = {
   description: "Google Ads keyword research and campaign builder",
   icons: { icon: "/gma-favicon.png" },
 };
+
+const appVersion = typeof packageJson.version === "string" ? packageJson.version : "0.0.0";
+const commitSha = (process.env.VERCEL_GIT_COMMIT_SHA ?? "").slice(0, 7);
+const buildLabel = commitSha ? `v${appVersion}-${commitSha}` : `v${appVersion}`;
 
 export default function RootLayout({
   children,
@@ -40,6 +45,9 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
+        <div className="fixed right-3 top-[84px] z-50 rounded border border-border bg-card/90 px-2 py-0.5 text-[10px] font-mono text-muted-foreground backdrop-blur">
+          {buildLabel}
+        </div>
         <ThemeProvider>
           <TooltipProvider>
             <AuthProvider>
