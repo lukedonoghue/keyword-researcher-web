@@ -213,6 +213,10 @@ export function useWorkflowData() {
           ...topCities.map(city => `${service} ${city}`),
         ].filter(Boolean);
 
+        const geoTargetIds = state.geoTargets.length > 0
+          ? state.geoTargets.map(t => t.id)
+          : [state.geoTargetId];
+
         try {
           const googleRes = await fetch('/api/google-ads/keywords', {
             method: 'POST',
@@ -221,9 +225,7 @@ export function useWorkflowData() {
               seedKeywords: seedTexts.slice(0, 20),
               targetUrl: state.targetUrl,
               languageId: state.languageId,
-              geoTargetIds: state.geoTargets.length > 0
-                ? state.geoTargets.map(t => t.id)
-                : [state.geoTargetId],
+              geoTargetIds,
             }),
           });
           if (googleRes.ok) {
@@ -241,9 +243,21 @@ export function useWorkflowData() {
                 competitionIndex: typeof kw.competitionIndex === 'number' ? kw.competitionIndex : 0,
                 source: 'google_ads' as const,
               }));
+
+            // Debug: log per-service CPC diversity
+            const distinctCpcs = new Set(parsed.map(kw => kw.cpc.toFixed(2)));
+            console.log(`[research] Service "${service}" → ${parsed.length} keywords, ${distinctCpcs.size} distinct CPCs, geo=${geoTargetIds.join(',')}, seeds=${seedTexts.slice(0, 5).join('; ')}`);
+            if (distinctCpcs.size <= 3 && parsed.length > 10) {
+              console.warn(`[research] WARNING: Only ${distinctCpcs.size} distinct CPCs across ${parsed.length} keywords for "${service}". CPCs: ${[...distinctCpcs].join(', ')}`);
+            }
+
             googleKeywords.push(...parsed);
+          } else {
+            console.warn(`[research] GKP call failed for "${service}": ${googleRes.status} ${googleRes.statusText}`);
           }
-        } catch { /* skip failed service call, continue with others */ }
+        } catch (err) {
+          console.warn(`[research] GKP call error for "${service}":`, err);
+        }
       }
 
       // Only Google Ads data in the final results — no Perplexity or fabricated location variants

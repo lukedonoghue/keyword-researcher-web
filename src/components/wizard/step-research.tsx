@@ -26,11 +26,25 @@ export function StepResearch() {
       const { keywords: allKeywords, competitorNames } = await researchKeywords((nextPhase) => setPhase(nextPhase));
 
       setPhase('merging');
+      // Debug: log pre-merge CPC diversity
+      const preMergeCpcs = new Set(allKeywords.map(kw => kw.cpc.toFixed(2)));
+      console.log(`[merge] Pre-merge: ${allKeywords.length} keywords, ${preMergeCpcs.size} distinct CPCs`);
+
       const merged = mergeKeywordsWithGoogleAdsAuthority([allKeywords]);
+
+      // Debug: log post-merge CPC diversity
+      const postMergeCpcs = new Set(merged.map(kw => kw.cpc.toFixed(2)));
+      console.log(`[merge] Post-merge: ${merged.length} keywords, ${postMergeCpcs.size} distinct CPCs`);
 
       setPhase('filtering');
       const enriched = enrichSeedKeywordsWithSignals(merged);
+
+      // Debug: log post-enrich CPC diversity
+      const postEnrichCpcs = new Set(enriched.map(kw => kw.cpc.toFixed(2)));
+      console.log(`[enrich] Post-enrich: ${enriched.length} keywords, ${postEnrichCpcs.size} distinct CPCs`);
+
       const { selected, suppressed } = applyStrategyFilter(enriched, state.strategy, competitorNames);
+      console.log(`[filter] Post-filter: ${selected.length} selected, ${suppressed.length} suppressed, ${new Set(selected.map(kw => kw.cpc.toFixed(2))).size} distinct CPCs in selected`);
 
       dispatch({ type: 'SET_SEED_KEYWORDS', keywords: merged });
       dispatch({ type: 'SET_FILTERED_KEYWORDS', selected, suppressed });
