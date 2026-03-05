@@ -24,7 +24,7 @@ function cpcStats(keywords: { cpc: number }[]): CpcStageStats {
   const cpcs = keywords.map(kw => kw.cpc).filter(c => c > 0);
   return {
     count: keywords.length,
-    distinctCpcs: new Set(cpcs.map(c => c.toFixed(2))).size,
+    distinctCpcs: new Set(cpcs.map(c => Math.round(c * 1_000_000))).size,
     cpcRange: cpcs.length > 0 ? [Math.min(...cpcs), Math.max(...cpcs)] : [0, 0],
   };
 }

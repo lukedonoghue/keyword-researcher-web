@@ -52,6 +52,7 @@ type GoogleKeywordApi = {
 type CpcDebugInfo = {
   total: number;
   distinctCpcs: number;
+  distinctCpcs2dp?: number;
   distinctVolumes: number;
   cpcRange: [number, number];
   volumeRange: [number, number];

@@ -40,8 +40,9 @@ export async function POST(request: NextRequest) {
     );
 
     // CPC diversity stats (visible in Network tab response)
-    const cpcs = keywords.map(kw => kw.cpc).filter(c => c > 0);
-    const distinctCpcs = new Set(cpcs.map(c => c.toFixed(2)));
+    const cpcs = keywords.map((kw) => kw.cpc).filter((c) => c > 0);
+    const distinctCpcMicros = new Set(cpcs.map((c) => Math.round(c * 1_000_000)));
+    const distinctCpcs2dp = new Set(cpcs.map((c) => c.toFixed(2)));
     const volumes = keywords.map(kw => kw.volume);
     const distinctVolumes = new Set(volumes);
     // Sample keywords at different positions
@@ -53,7 +54,8 @@ export async function POST(request: NextRequest) {
       keywords,
       _cpcDebug: {
         total: keywords.length,
-        distinctCpcs: distinctCpcs.size,
+        distinctCpcs: distinctCpcMicros.size,
+        distinctCpcs2dp: distinctCpcs2dp.size,
         distinctVolumes: distinctVolumes.size,
         cpcRange: cpcs.length > 0 ? [Math.min(...cpcs), Math.max(...cpcs)] : [0, 0],
         volumeRange: volumes.length > 0 ? [Math.min(...volumes), Math.max(...volumes)] : [0, 0],

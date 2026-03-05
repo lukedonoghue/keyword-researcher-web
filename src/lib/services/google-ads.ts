@@ -23,6 +23,9 @@ type GoogleAdsCredentials = {
 
 export class GoogleAdsService {
   private static readonly REQUEST_TIMEOUT_MS = 45000;
+  private static readonly KEYWORD_IDEA_MAX_RESULTS = 500;
+  private static readonly KEYWORD_IDEA_PAGE_SIZE = 100;
+  private static readonly KEYWORD_IDEA_PAGE_LIMIT = 12;
   private client: GoogleAdsApi;
   private customerId: string;
   private refreshToken: string;
@@ -148,6 +151,110 @@ export class GoogleAdsService {
       row.metrics ||
       keywordRecord.keyword_idea_metrics
     );
+  }
+
+  private distinctMetricCounts(keywords: KeywordMetric[]): { cpcs: number; volumes: number } {
+    const cpcs = new Set<number>();
+    const volumes = new Set<number>();
+    for (const keyword of keywords) {
+      if (keyword.cpc > 0) {
+        cpcs.add(Math.round(keyword.cpc * 1_000_000));
+      }
+      volumes.add(keyword.volume);
+    }
+    return { cpcs: cpcs.size, volumes: volumes.size };
+  }
+
+  private shouldRetryKeywordAndUrl(primary: KeywordMetric[]): boolean {
+    if (primary.length < 20) return false;
+    const counts = this.distinctMetricCounts(primary);
+    return counts.cpcs <= 1 && counts.volumes <= 1;
+  }
+
+  private chooseBetterKeywordSet(primary: KeywordMetric[], fallback: KeywordMetric[]): KeywordMetric[] {
+    if (fallback.length === 0) return primary;
+    const primaryCounts = this.distinctMetricCounts(primary);
+    const fallbackCounts = this.distinctMetricCounts(fallback);
+    const primaryScore = primaryCounts.cpcs * 10_000 + primaryCounts.volumes;
+    const fallbackScore = fallbackCounts.cpcs * 10_000 + fallbackCounts.volumes;
+
+    if (fallbackScore > primaryScore) {
+      console.log(
+        `[generateKeywordIdeas] Using keyword-only fallback due to better diversity. primary cpcs=${primaryCounts.cpcs} volumes=${primaryCounts.volumes}; fallback cpcs=${fallbackCounts.cpcs} volumes=${fallbackCounts.volumes}`
+      );
+      return fallback;
+    }
+
+    return primary;
+  }
+
+  private dedupeKeywordIdeas(keywords: KeywordMetric[]): KeywordMetric[] {
+    const deduped = new Map<string, KeywordMetric>();
+    for (const keyword of keywords) {
+      const key = keyword.text.toLowerCase();
+      if (!key) continue;
+      const existing = deduped.get(key);
+      if (!existing) {
+        deduped.set(key, keyword);
+        continue;
+      }
+
+      const incomingCpc = keyword.cpc > 0 ? keyword.cpc : null;
+      const existingCpc = existing.cpc > 0 ? existing.cpc : null;
+      const better =
+        incomingCpc !== null && existingCpc !== null && incomingCpc !== existingCpc ? (incomingCpc < existingCpc ? keyword : existing) :
+        incomingCpc !== null && existingCpc === null ? keyword :
+        existingCpc !== null && incomingCpc === null ? existing :
+        keyword.volume > existing.volume ? keyword :
+        existing;
+
+      deduped.set(key, better);
+    }
+    return Array.from(deduped.values());
+  }
+
+  private async fetchKeywordIdeasPaged(
+    customer: Awaited<ReturnType<GoogleAdsService['getCustomer']>>,
+    baseRequest: Record<string, unknown>,
+    maxResults: number = GoogleAdsService.KEYWORD_IDEA_MAX_RESULTS
+  ): Promise<KeywordMetric[]> {
+    const aggregated: KeywordMetric[] = [];
+    const seenTokens = new Set<string>();
+    let pageToken = '';
+
+    for (let page = 0; page < GoogleAdsService.KEYWORD_IDEA_PAGE_LIMIT; page++) {
+      const remaining = maxResults - aggregated.length;
+      if (remaining <= 0) break;
+
+      const request: Record<string, unknown> = {
+        ...baseRequest,
+        page_size: Math.min(GoogleAdsService.KEYWORD_IDEA_PAGE_SIZE, remaining),
+      };
+      if (pageToken) {
+        request.page_token = pageToken;
+      }
+
+      const response = await this.withTimeout(
+        customer.keywordPlanIdeas.generateKeywordIdeas(
+          request as unknown as Parameters<typeof customer.keywordPlanIdeas.generateKeywordIdeas>[0]
+        ),
+        GoogleAdsService.REQUEST_TIMEOUT_MS,
+        'Google Ads keyword idea request timed out.',
+      );
+
+      aggregated.push(...this.normalizeKeywordIdeas(response));
+      const responseRecord = this.asRecord(response);
+      const nextTokenRaw = responseRecord.next_page_token ?? responseRecord.nextPageToken;
+      const nextToken = typeof nextTokenRaw === 'string' ? nextTokenRaw : '';
+      if (!nextToken || seenTokens.has(nextToken)) {
+        break;
+      }
+
+      seenTokens.add(nextToken);
+      pageToken = nextToken;
+    }
+
+    return this.dedupeKeywordIdeas(aggregated).slice(0, maxResults);
   }
 
   private normalizeKeywordIdeas(response: unknown): KeywordMetric[] {
@@ -319,31 +426,47 @@ export class GoogleAdsService {
 
     const customer = await this.getCustomer();
     const topSeeds = seedKeywords.filter(Boolean).slice(0, 20);
-    const request: Record<string, unknown> = {
+    const baseRequest: Record<string, unknown> = {
       customer_id: this.customerId,
       language: `languageConstants/${languageId}`,
       geo_target_constants: geoTargetIds.map((id) => `geoTargetConstants/${id}`),
       keyword_plan_network: enums.KeywordPlanNetwork.GOOGLE_SEARCH,
       include_adult_keywords: false,
-      page_size: 500,
+      historical_metrics_options: {
+        include_average_cpc: true,
+      },
     };
 
     if (topSeeds.length > 0 && targetUrl) {
-      request.keyword_and_url_seed = { keywords: topSeeds, url: targetUrl };
-    } else if (topSeeds.length > 0) {
-      request.keyword_seed = { keywords: topSeeds };
-    } else {
-      request.url_seed = { url: targetUrl };
+      const keywordAndUrlRequest: Record<string, unknown> = {
+        ...baseRequest,
+        keyword_and_url_seed: { keywords: topSeeds, url: targetUrl },
+      };
+      const primary = await this.fetchKeywordIdeasPaged(customer, keywordAndUrlRequest);
+
+      if (!this.shouldRetryKeywordAndUrl(primary)) {
+        return primary;
+      }
+
+      const keywordOnlyRequest: Record<string, unknown> = {
+        ...baseRequest,
+        keyword_seed: { keywords: topSeeds },
+      };
+      const fallback = await this.fetchKeywordIdeasPaged(customer, keywordOnlyRequest);
+      return this.chooseBetterKeywordSet(primary, fallback);
     }
 
-    const response = await this.withTimeout(
-      customer.keywordPlanIdeas.generateKeywordIdeas(
-        request as unknown as Parameters<typeof customer.keywordPlanIdeas.generateKeywordIdeas>[0]
-      ),
-      GoogleAdsService.REQUEST_TIMEOUT_MS,
-      'Google Ads keyword idea request timed out.',
-    );
-    return this.normalizeKeywordIdeas(response);
+    if (topSeeds.length > 0) {
+      return this.fetchKeywordIdeasPaged(customer, {
+        ...baseRequest,
+        keyword_seed: { keywords: topSeeds },
+      });
+    }
+
+    return this.fetchKeywordIdeasPaged(customer, {
+      ...baseRequest,
+      url_seed: { url: targetUrl },
+    });
   }
 
   async generateKeywordIdeasDebug(
@@ -365,6 +488,9 @@ export class GoogleAdsService {
       keyword_plan_network: enums.KeywordPlanNetwork.GOOGLE_SEARCH,
       include_adult_keywords: false,
       page_size: 20,
+      historical_metrics_options: {
+        include_average_cpc: true,
+      },
     };
 
     if (topSeeds.length > 0 && targetUrl) {
