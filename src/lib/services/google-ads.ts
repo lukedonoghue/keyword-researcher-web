@@ -140,6 +140,16 @@ export class GoogleAdsService {
     return 0;
   }
 
+  private extractMetrics(row: Record<string, unknown>): Record<string, unknown> {
+    const keywordRecord = this.asRecord(row.keyword);
+    return this.asRecord(
+      row.keyword_idea_metrics ||
+      row.keywordIdeaMetrics ||
+      row.metrics ||
+      keywordRecord.keyword_idea_metrics
+    );
+  }
+
   private normalizeKeywordIdeas(response: unknown): KeywordMetric[] {
     const responseRecord = this.asRecord(response);
     const rows = Array.isArray(responseRecord.results)
@@ -148,22 +158,26 @@ export class GoogleAdsService {
         ? response
         : [];
 
-    // Debug: log raw shape of first 3 rows
-    if (rows.length > 0) {
-      console.log(`[normalizeKeywordIdeas] ${rows.length} raw rows. First row keys:`, Object.keys(this.asRecord(rows[0])));
-      for (let i = 0; i < Math.min(3, rows.length); i++) {
-        const row = this.asRecord(rows[i]);
-        const metrics = this.asRecord(row.keyword_idea_metrics || row.keywordIdeaMetrics || row.metrics);
-        const kw = this.asRecord(row.keyword);
-        console.log(`[normalizeKeywordIdeas] row[${i}]:`, {
-          text: row.text ?? kw.text,
-          metricsKeys: Object.keys(metrics),
-          avgMonthlySearches: metrics.avg_monthly_searches ?? metrics.avgMonthlySearches,
-          lowTopBid: metrics.low_top_of_page_bid_micros ?? metrics.lowTopOfPageBidMicros,
-          highTopBid: metrics.high_top_of_page_bid_micros ?? metrics.highTopOfPageBidMicros,
-        });
-      }
+    // Sample raw metrics at different positions to check if they differ
+    const sampleIndices = [0, Math.floor(rows.length / 2), rows.length - 1].filter((v, i, a) => a.indexOf(v) === i && v < rows.length);
+    const rawSamples: Array<{ idx: number; text: string; lowBid: unknown; highBid: unknown; vol: unknown; sameRef: boolean }> = [];
+    let firstMetricsRef: unknown = null;
+    for (const idx of sampleIndices) {
+      const row = this.asRecord(rows[idx]);
+      const metricsRaw = row.keyword_idea_metrics || row.keywordIdeaMetrics || row.metrics;
+      const metrics = this.asRecord(metricsRaw);
+      const kw = this.asRecord(row.keyword);
+      if (idx === 0) firstMetricsRef = metricsRaw;
+      rawSamples.push({
+        idx,
+        text: String(row.text ?? kw.text ?? '').slice(0, 40),
+        lowBid: metrics.low_top_of_page_bid_micros ?? metrics.lowTopOfPageBidMicros ?? '(missing)',
+        highBid: metrics.high_top_of_page_bid_micros ?? metrics.highTopOfPageBidMicros ?? '(missing)',
+        vol: metrics.avg_monthly_searches ?? metrics.avgMonthlySearches ?? '(missing)',
+        sameRef: metricsRaw === firstMetricsRef,
+      });
     }
+    console.log(`[normalizeKeywordIdeas] ${rows.length} rows. Raw metric samples:`, JSON.stringify(rawSamples));
 
     return rows
       .map((item) => {
@@ -179,12 +193,7 @@ export class GoogleAdsService {
         const text = rawKeyword.trim();
         if (!text) return null;
 
-        const metrics = this.asRecord(
-          row.keyword_idea_metrics ||
-          row.keywordIdeaMetrics ||
-          row.metrics ||
-          keywordRecord.keyword_idea_metrics
-        );
+        const metrics = this.extractMetrics(row);
         const rawVolume =
           metrics.avg_monthly_searches ??
           metrics.avgMonthlySearches ??

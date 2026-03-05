@@ -31,9 +31,12 @@ type ResearchCompetitorsResponse = {
   competitors?: Array<{ name?: string; domain?: string; description?: string }>;
 };
 
+type ServiceCpcDebug = { service: string; debug: CpcDebugInfo };
+
 type ResearchKeywordsResult = {
   keywords: SeedKeyword[];
   competitorNames: string[];
+  cpcDebug: ServiceCpcDebug[];
 };
 
 type GoogleKeywordApi = {
@@ -46,8 +49,18 @@ type GoogleKeywordApi = {
   competitionIndex?: number;
 };
 
+type CpcDebugInfo = {
+  total: number;
+  distinctCpcs: number;
+  distinctVolumes: number;
+  cpcRange: [number, number];
+  volumeRange: [number, number];
+  samples: Array<{ i: number; text: string; cpc: number; vol: number }>;
+};
+
 type GoogleKeywordsResponse = {
   keywords?: GoogleKeywordApi[];
+  _cpcDebug?: CpcDebugInfo;
 };
 
 type EnhancePhaseResponse = {
@@ -189,6 +202,7 @@ export function useWorkflowData() {
       const topCities = cities.slice(0, 3);
 
       const googleKeywords: SeedKeyword[] = [];
+      const cpcDebugEntries: ServiceCpcDebug[] = [];
       for (const service of state.selectedServices) {
         const discoverySeeds = discoveredSvcMap.get(service) ?? [];
         const perplexityForService = (perplexityByService.get(service) ?? []).slice(0, 5);
@@ -244,16 +258,11 @@ export function useWorkflowData() {
                 source: 'google_ads' as const,
               }));
 
-            // Debug: log per-service CPC diversity
-            const distinctCpcs = new Set(parsed.map(kw => kw.cpc.toFixed(2)));
-            console.log(`[research] Service "${service}" → ${parsed.length} keywords, ${distinctCpcs.size} distinct CPCs, geo=${geoTargetIds.join(',')}, seeds=${seedTexts.slice(0, 5).join('; ')}`);
-            if (distinctCpcs.size <= 3 && parsed.length > 10) {
-              console.warn(`[research] WARNING: Only ${distinctCpcs.size} distinct CPCs across ${parsed.length} keywords for "${service}". CPCs: ${[...distinctCpcs].join(', ')}`);
+            if (googleData._cpcDebug) {
+              cpcDebugEntries.push({ service, debug: googleData._cpcDebug });
             }
 
             googleKeywords.push(...parsed);
-          } else {
-            console.warn(`[research] GKP call failed for "${service}": ${googleRes.status} ${googleRes.statusText}`);
           }
         } catch (err) {
           console.warn(`[research] GKP call error for "${service}":`, err);
@@ -263,7 +272,7 @@ export function useWorkflowData() {
       // Only Google Ads data in the final results — no Perplexity or fabricated location variants
       const allKeywords = [...googleKeywords];
       dispatch({ type: 'SET_SEED_KEYWORDS', keywords: allKeywords });
-      return { keywords: allKeywords, competitorNames };
+      return { keywords: allKeywords, competitorNames, cpcDebug: cpcDebugEntries };
     } catch (err: unknown) {
       dispatch({ type: 'SET_ERROR', error: getErrorMessage(err, 'Failed to research keywords') });
       throw err;

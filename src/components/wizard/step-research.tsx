@@ -12,10 +12,28 @@ import { mergeKeywordsWithGoogleAdsAuthority } from '@/lib/logic/keyword-merge';
 import { calculateRecommendedBudget } from '@/lib/logic/budget-calculator';
 import { PhaseRow } from './phase-row';
 
+type CpcStageStats = { count: number; distinctCpcs: number; cpcRange: [number, number] };
+type PipelineStats = {
+  apiPerService: Array<{ service: string; total: number; distinctCpcs: number; cpcRange: [number, number]; samples: Array<{ text: string; cpc: number; vol: number }> }>;
+  preMerge: CpcStageStats;
+  postMerge: CpcStageStats;
+  postFilter: CpcStageStats;
+};
+
+function cpcStats(keywords: { cpc: number }[]): CpcStageStats {
+  const cpcs = keywords.map(kw => kw.cpc).filter(c => c > 0);
+  return {
+    count: keywords.length,
+    distinctCpcs: new Set(cpcs.map(c => c.toFixed(2))).size,
+    cpcRange: cpcs.length > 0 ? [Math.min(...cpcs), Math.max(...cpcs)] : [0, 0],
+  };
+}
+
 export function StepResearch() {
   const { state, dispatch } = useWorkflow();
   const { researchKeywords, isProcessing, error } = useWorkflowData();
   const [phase, setPhase] = useState<'competitors' | 'google' | 'merging' | 'filtering' | 'done'>('competitors');
+  const [pipelineStats, setPipelineStats] = useState<PipelineStats | null>(null);
   const startedRef = useRef(false);
 
   const runResearch = useCallback(async (force: boolean = false) => {
@@ -23,28 +41,28 @@ export function StepResearch() {
     startedRef.current = true;
     try {
       setPhase('competitors');
-      const { keywords: allKeywords, competitorNames } = await researchKeywords((nextPhase) => setPhase(nextPhase));
+      const { keywords: allKeywords, competitorNames, cpcDebug } = await researchKeywords((nextPhase) => setPhase(nextPhase));
+
+      // Build per-service stats from API debug responses
+      const apiPerService = cpcDebug.map(entry => ({
+        service: entry.service,
+        total: entry.debug.total,
+        distinctCpcs: entry.debug.distinctCpcs,
+        cpcRange: entry.debug.cpcRange,
+        samples: entry.debug.samples.map(s => ({ text: s.text, cpc: s.cpc, vol: s.vol })),
+      }));
 
       setPhase('merging');
-      // Debug: log pre-merge CPC diversity
-      const preMergeCpcs = new Set(allKeywords.map(kw => kw.cpc.toFixed(2)));
-      console.log(`[merge] Pre-merge: ${allKeywords.length} keywords, ${preMergeCpcs.size} distinct CPCs`);
-
+      const preMerge = cpcStats(allKeywords);
       const merged = mergeKeywordsWithGoogleAdsAuthority([allKeywords]);
-
-      // Debug: log post-merge CPC diversity
-      const postMergeCpcs = new Set(merged.map(kw => kw.cpc.toFixed(2)));
-      console.log(`[merge] Post-merge: ${merged.length} keywords, ${postMergeCpcs.size} distinct CPCs`);
+      const postMerge = cpcStats(merged);
 
       setPhase('filtering');
       const enriched = enrichSeedKeywordsWithSignals(merged);
-
-      // Debug: log post-enrich CPC diversity
-      const postEnrichCpcs = new Set(enriched.map(kw => kw.cpc.toFixed(2)));
-      console.log(`[enrich] Post-enrich: ${enriched.length} keywords, ${postEnrichCpcs.size} distinct CPCs`);
-
       const { selected, suppressed } = applyStrategyFilter(enriched, state.strategy, competitorNames);
-      console.log(`[filter] Post-filter: ${selected.length} selected, ${suppressed.length} suppressed, ${new Set(selected.map(kw => kw.cpc.toFixed(2))).size} distinct CPCs in selected`);
+      const postFilter = cpcStats(selected);
+
+      setPipelineStats({ apiPerService, preMerge, postMerge, postFilter });
 
       dispatch({ type: 'SET_SEED_KEYWORDS', keywords: merged });
       dispatch({ type: 'SET_FILTERED_KEYWORDS', selected, suppressed });
@@ -70,7 +88,7 @@ export function StepResearch() {
     return state.selectedKeywords
       .slice()
       .sort((a, b) => b.volume - a.volume)
-      .slice(0, 5);
+      .slice(0, 10);
   }, [state.selectedKeywords]);
 
   return (
@@ -117,7 +135,9 @@ export function StepResearch() {
 
               {topKeywords.length > 0 && (
                 <div className="space-y-1.5">
-                  <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Top keywords by volume</p>
+                  <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
+                    Top keywords by volume
+                  </p>
                   <div className="rounded-md border border-green-200 dark:border-green-900 overflow-hidden">
                     <Table>
                       <TableHeader>
@@ -168,6 +188,33 @@ export function StepResearch() {
                     Total monthly search volume: {budget.totalMonthlyVolume.toLocaleString()}
                   </p>
                 </div>
+              )}
+
+              {/* CPC Pipeline Debug — shows where CPC diversity exists or is lost */}
+              {pipelineStats && (
+                <details className="text-[11px]">
+                  <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
+                    CPC pipeline diagnostics
+                  </summary>
+                  <div className="mt-2 space-y-2 rounded-md border border-green-200 dark:border-green-900 bg-white/60 dark:bg-green-950/40 px-3 py-2">
+                    {pipelineStats.apiPerService.map((svc, i) => (
+                      <div key={i}>
+                        <p className="font-medium">API: &quot;{svc.service}&quot;</p>
+                        <p className="text-muted-foreground">
+                          {svc.total} keywords, {svc.distinctCpcs} distinct CPCs, range ${svc.cpcRange[0].toFixed(2)}–${svc.cpcRange[1].toFixed(2)}
+                        </p>
+                        <p className="text-muted-foreground">
+                          Samples: {svc.samples.map(s => `${s.text}=$${s.cpc.toFixed(2)}`).join(', ')}
+                        </p>
+                      </div>
+                    ))}
+                    <div className="border-t border-green-200 dark:border-green-900 pt-1">
+                      <p>Pre-merge: {pipelineStats.preMerge.count} kws, {pipelineStats.preMerge.distinctCpcs} distinct CPCs, ${pipelineStats.preMerge.cpcRange[0].toFixed(2)}–${pipelineStats.preMerge.cpcRange[1].toFixed(2)}</p>
+                      <p>Post-merge: {pipelineStats.postMerge.count} kws, {pipelineStats.postMerge.distinctCpcs} distinct CPCs, ${pipelineStats.postMerge.cpcRange[0].toFixed(2)}–${pipelineStats.postMerge.cpcRange[1].toFixed(2)}</p>
+                      <p>Post-filter: {pipelineStats.postFilter.count} kws, {pipelineStats.postFilter.distinctCpcs} distinct CPCs, ${pipelineStats.postFilter.cpcRange[0].toFixed(2)}–${pipelineStats.postFilter.cpcRange[1].toFixed(2)}</p>
+                    </div>
+                  </div>
+                </details>
               )}
 
               <Button
