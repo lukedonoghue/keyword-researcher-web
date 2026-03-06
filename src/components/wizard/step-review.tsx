@@ -10,7 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
-import { Search, SearchX, X, ChevronUp, ChevronDown, ChevronRight } from 'lucide-react';
+import { Search, SearchX, X, ChevronUp, ChevronDown, ChevronRight, Hash, DollarSign, TrendingUp, Target } from 'lucide-react';
 import { calculateBudgetTiers } from '@/lib/logic/budget-calculator';
 
 const intentColors: Record<string, string> = {
@@ -28,6 +28,15 @@ const qualityColors: Record<string, string> = {
   'B': 'bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-300',
   'C': 'bg-yellow-100 text-yellow-800 dark:bg-yellow-950 dark:text-yellow-300',
   'D': 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300',
+};
+
+const qualityDotColors: Record<string, string> = {
+  'A+': 'bg-emerald-500',
+  'A': 'bg-green-500',
+  'B+': 'bg-blue-500',
+  'B': 'bg-sky-500',
+  'C': 'bg-yellow-500',
+  'D': 'bg-red-500',
 };
 
 type SortKey = 'text' | 'volume' | 'cpc' | 'intent' | 'quality';
@@ -235,7 +244,7 @@ export function StepReview() {
   const sortableHeaderClass = 'text-[11px] font-medium cursor-pointer select-none hover:text-foreground transition-colors';
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-6 max-w-4xl">
       {/* Title row */}
       <div className="flex items-center justify-between">
         <div>
@@ -260,82 +269,99 @@ export function StepReview() {
       </div>
 
       {/* Summary stats bar */}
-      <div className="grid grid-cols-4 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         <Card className="relative overflow-hidden">
-          <CardContent className="p-3">
-            <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Keywords</p>
-            <p className="text-2xl font-semibold tabular-nums">{stats.count.toLocaleString()}</p>
-            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-brand-accent" />
+          <div className="absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-brand-accent via-brand-accent/60 to-transparent" />
+          <CardContent className="p-3.5 space-y-1.5">
+            <p className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+              <Hash className="h-3.5 w-3.5 text-brand-accent" />
+              Keywords
+            </p>
+            <p className="text-3xl font-semibold tabular-nums text-brand-accent">{stats.count.toLocaleString()}</p>
+            <p className="text-[10px] text-muted-foreground">Primary campaign inventory</p>
           </CardContent>
         </Card>
         <Card className="relative overflow-hidden">
-          <CardContent className="p-3">
-            <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Avg CPC</p>
-            <p className="text-2xl font-semibold tabular-nums">${stats.avgCpc.toFixed(2)}</p>
-            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-brand-accent" />
+          <div className="absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-brand-accent/70 via-brand-accent/35 to-transparent" />
+          <CardContent className="p-3.5 space-y-1.5">
+            <p className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+              <DollarSign className="h-3.5 w-3.5 text-brand-accent/80" />
+              Avg CPC
+            </p>
+            <p className="text-3xl font-semibold tabular-nums">${stats.avgCpc.toFixed(2)}</p>
+            <p className="text-[10px] text-muted-foreground">Per keyword click estimate</p>
           </CardContent>
         </Card>
         <Card className="relative overflow-hidden">
-          <CardContent className="p-3">
-            <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Recommended Budget</p>
-            <p className="text-2xl font-semibold tabular-nums">${Math.round(stats.conservativeDaily)}&ndash;${Math.round(stats.aggressiveDaily)}/day</p>
+          <div className="absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-brand-accent/70 via-brand-accent/35 to-transparent" />
+          <CardContent className="p-3.5 space-y-1.5">
+            <p className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+              <TrendingUp className="h-3.5 w-3.5 text-brand-accent/80" />
+              Recommended Budget
+            </p>
+            <p className="text-3xl font-semibold tabular-nums">${Math.round(stats.conservativeDaily)}&ndash;${Math.round(stats.aggressiveDaily)}/day</p>
             <p className="text-[10px] text-muted-foreground tabular-nums">Recommended: ${Math.round(stats.balancedDaily)}/day (20 clicks)</p>
-            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-brand-accent" />
           </CardContent>
         </Card>
         <Card className="relative overflow-hidden">
-          <CardContent className="p-3">
-            <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Top Intent</p>
-            <p className="text-2xl font-semibold">
+          <div className="absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-brand-accent/70 via-brand-accent/35 to-transparent" />
+          <CardContent className="p-3.5 space-y-1.5">
+            <p className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+              <Target className="h-3.5 w-3.5 text-brand-accent/80" />
+              Top Intent
+            </p>
+            <p className="text-3xl font-semibold tabular-nums">
               <span className="text-sm">{stats.dominantPct}%</span>{' '}
               <span className="text-xs font-normal text-muted-foreground capitalize">{stats.dominantIntent}</span>
             </p>
-            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-brand-accent" />
+            <p className="text-[10px] text-muted-foreground">Dominant conversion profile</p>
           </CardContent>
         </Card>
       </div>
 
       {/* Filter chips + search */}
-      <div className="flex items-center gap-2 flex-wrap">
-        {INTENT_FILTERS.map(f => (
-          <button
-            key={f.value}
-            onClick={() => setIntentFilter(f.value)}
-            className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-medium border transition-colors ${
-              intentFilter === f.value
-                ? 'bg-primary text-primary-foreground border-primary'
-                : 'bg-background text-muted-foreground border-border hover:bg-accent hover:text-accent-foreground'
-            }`}
-          >
-            {f.label}
-          </button>
-        ))}
-        <div className="flex items-center gap-1.5 ml-2">
-          <span className="text-[11px] text-muted-foreground whitespace-nowrap">Max CPC</span>
-          <div className="relative">
-            <span className="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">$</span>
+      <div className="rounded-lg bg-muted/20 border border-border/70 p-2.5">
+        <div className="flex items-center gap-2 flex-wrap">
+          {INTENT_FILTERS.map(f => (
+            <button
+              key={f.value}
+              onClick={() => setIntentFilter(f.value)}
+              className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-medium border transition-colors ${
+                intentFilter === f.value
+                  ? 'bg-brand-accent text-brand-accent-foreground border-brand-accent'
+                  : 'bg-background text-muted-foreground border-border hover:bg-accent hover:text-accent-foreground'
+              }`}
+            >
+              {f.label}
+            </button>
+          ))}
+          <div className="flex items-center gap-1.5 ml-2">
+            <span className="text-[11px] text-muted-foreground whitespace-nowrap">Max CPC</span>
+            <div className="relative">
+              <span className="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">$</span>
+              <Input
+                type="number"
+                min={0}
+                step={0.5}
+                placeholder="—"
+                value={maxCpcFilter ?? ''}
+                onChange={e => {
+                  const val = e.target.value;
+                  setMaxCpcFilter(val === '' ? null : parseFloat(val) || null);
+                }}
+                className="h-7 w-20 pl-5 text-xs tabular-nums"
+              />
+            </div>
+          </div>
+          <div className="relative ml-auto">
+            <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
             <Input
-              type="number"
-              min={0}
-              step={0.5}
-              placeholder="—"
-              value={maxCpcFilter ?? ''}
-              onChange={e => {
-                const val = e.target.value;
-                setMaxCpcFilter(val === '' ? null : parseFloat(val) || null);
-              }}
-              className="h-7 w-20 pl-5 text-xs tabular-nums"
+              placeholder="Search keywords..."
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              className="h-7 w-52 pl-7 text-xs"
             />
           </div>
-        </div>
-        <div className="relative ml-auto">
-          <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-          <Input
-            placeholder="Search keywords..."
-            value={searchQuery}
-            onChange={e => setSearchQuery(e.target.value)}
-            className="h-7 w-48 pl-7 text-xs"
-          />
         </div>
       </div>
 
@@ -351,8 +377,8 @@ export function StepReview() {
         <CardContent className="p-0">
           <ScrollArea className="h-[calc(100vh-400px)]">
             <Table>
-              <TableHeader>
-                <TableRow>
+              <TableHeader className="sticky top-0 z-10 bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/90">
+                <TableRow className="border-b border-border/80">
                   <TableHead
                     className={`${sortableHeaderClass} w-[300px]`}
                     onClick={() => handleSort('text')}
@@ -389,12 +415,12 @@ export function StepReview() {
               </TableHeader>
               <TableBody>
                 {filteredKeywords.map(({ kw, originalIndex }) => (
-                  <TableRow key={`${kw.text}-${originalIndex}`} className="h-8 group">
-                    <TableCell className="text-xs font-mono py-1">{kw.text}</TableCell>
-                    <TableCell className="text-xs text-right py-1 tabular-nums">
+                  <TableRow key={`${kw.text}-${originalIndex}`} className="h-9 group odd:bg-background even:bg-muted/25 hover:bg-muted/40">
+                    <TableCell className="text-xs font-mono py-1.5">{kw.text}</TableCell>
+                    <TableCell className="text-xs text-right py-1.5 tabular-nums">
                       {kw.volume.toLocaleString()}
                     </TableCell>
-                    <TableCell className="text-xs text-right py-1 tabular-nums">
+                    <TableCell className="text-xs text-right py-1.5 tabular-nums">
                       {(kw.cpcLow || kw.cpcHigh) ? (
                         <Tooltip>
                           <TooltipTrigger asChild>
@@ -413,27 +439,28 @@ export function StepReview() {
                         <span>${kw.cpc.toFixed(2)}</span>
                       )}
                     </TableCell>
-                    <TableCell className="py-1">
+                    <TableCell className="py-1.5">
                       <Badge
-                        variant="outline"
-                        className={`text-[10px] px-1.5 py-0 ${intentColors[kw.intent || 'unknown']}`}
+                        className={`text-[10px] px-1.5 py-0 border-0 capitalize ${intentColors[kw.intent || 'unknown']}`}
                       >
                         {kw.intent || 'unknown'}
                       </Badge>
                     </TableCell>
-                    <TableCell className="py-1">
+                    <TableCell className="py-1.5">
                       {kw.qualityRating && (
                         <Badge
-                          className={`text-[10px] px-1.5 py-0 border ${qualityColors[kw.qualityRating] || ''}`}
+                          className={`text-[10px] px-1.5 py-0 border inline-flex items-center gap-1 ${qualityColors[kw.qualityRating] || ''}`}
                         >
+                          <span className={`h-1.5 w-1.5 rounded-full ${qualityDotColors[kw.qualityRating] || 'bg-muted-foreground'}`} />
                           {kw.qualityRating}
                         </Badge>
                       )}
+                      {!kw.qualityRating && <span className="text-[10px] text-muted-foreground">—</span>}
                     </TableCell>
-                    <TableCell className="py-1">
+                    <TableCell className="py-1.5">
                       <span className="text-[10px] text-muted-foreground">{kw.source}</span>
                     </TableCell>
-                    <TableCell className="py-1">
+                    <TableCell className="py-1.5">
                       <button
                         onClick={() => handleRemove(originalIndex)}
                         className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-destructive/10 hover:text-destructive"

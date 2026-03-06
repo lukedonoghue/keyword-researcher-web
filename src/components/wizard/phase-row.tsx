@@ -12,7 +12,7 @@ export function PhaseRow({ label, active, done }: { label: string; active: boole
       ) : (
         <div className="h-3.5 w-3.5 rounded-full border border-border" />
       )}
-      <span className={`text-xs ${active ? 'text-foreground font-medium' : done ? 'text-muted-foreground' : 'text-muted-foreground/60'}`}>
+      <span className={`text-xs ${active ? 'text-foreground font-medium animate-pulse' : done ? 'text-muted-foreground' : 'text-muted-foreground/60'}`}>
         {label}
       </span>
     </div>

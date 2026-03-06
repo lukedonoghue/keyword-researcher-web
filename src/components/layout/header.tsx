@@ -33,7 +33,8 @@ export function Header() {
   }, []);
 
   return (
-    <header className="border-b border-border bg-card shadow-[0_1px_3px_0_rgb(0,0,0,0.03)] dark:shadow-[0_1px_6px_0_rgb(0,0,0,0.15)]">
+    <header className="sticky top-0 z-40 relative border-b border-border/70 bg-card/85 backdrop-blur supports-[backdrop-filter]:bg-card/75 shadow-[0_1px_8px_0_rgb(0,0,0,0.04)] dark:shadow-[0_2px_10px_0_rgb(0,0,0,0.2)]">
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-brand-accent/40 to-transparent" />
       <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4">
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2">
@@ -56,8 +57,8 @@ export function Header() {
           )}
         </div>
         <div className="flex items-center gap-2">
-          <span className="rounded bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
-            BUILD {buildLabel}
+          <span className="text-[10px] font-medium text-muted-foreground/80 tracking-wide">
+            build {buildLabel}
           </span>
           <Button variant="ghost" size="sm" onClick={toggleTheme} className="h-7 w-7 p-0">
             {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}

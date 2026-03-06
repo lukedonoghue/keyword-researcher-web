@@ -18,7 +18,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Download, Upload, Pencil, FileSpreadsheet, ArrowRight, ChevronRight, Settings2, TableIcon, List, MapPin, AlertCircle } from 'lucide-react';
+import { Download, Upload, Pencil, FileSpreadsheet, ArrowRight, ChevronRight, Settings2, TableIcon, List, MapPin, AlertCircle, Hash, CheckCircle2, Target } from 'lucide-react';
 import { Progress } from '@/components/ui/progress';
 import { calculateBudgetTiers, estimatedDailyClicks, estimatedMonthlyConversions } from '@/lib/logic/budget-calculator';
 import { BudgetPlanner } from './budget-planner';
@@ -342,7 +342,7 @@ export function StepCampaign() {
   }, [handleFinishEditing]);
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-6 max-w-4xl">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -406,7 +406,7 @@ export function StepCampaign() {
 
       {/* Re-run Error */}
       {rerunError && (
-        <Card className="border-destructive/50 bg-destructive/5">
+        <Card className="border-destructive/40 border-l-4 border-l-destructive bg-destructive/5">
           <CardContent className="py-3">
             <div className="flex items-start gap-2">
               <AlertCircle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
@@ -488,22 +488,34 @@ export function StepCampaign() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               {/* Left: Key metrics */}
               <div className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Campaigns</p>
-                    <p className="text-2xl font-bold tabular-nums">{state.campaigns.length}</p>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="rounded-md border border-border/70 bg-muted/20 px-3 py-2.5">
+                    <p className="flex items-center gap-1 text-[10px] text-muted-foreground uppercase tracking-wider">
+                      <TableIcon className="h-3 w-3" />
+                      Campaigns
+                    </p>
+                    <p className="text-3xl font-bold tabular-nums">{state.campaigns.length}</p>
                   </div>
-                  <div>
-                    <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Ad Groups</p>
-                    <p className="text-2xl font-bold tabular-nums">{stats.totalAdGroups}</p>
+                  <div className="rounded-md border border-border/70 bg-muted/20 px-3 py-2.5">
+                    <p className="flex items-center gap-1 text-[10px] text-muted-foreground uppercase tracking-wider">
+                      <List className="h-3 w-3" />
+                      Ad Groups
+                    </p>
+                    <p className="text-3xl font-bold tabular-nums">{stats.totalAdGroups}</p>
                   </div>
-                  <div>
-                    <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Keywords</p>
-                    <p className="text-2xl font-bold tabular-nums">{stats.totalKeywords.toLocaleString()}</p>
+                  <div className="rounded-md border border-brand-accent/35 bg-brand-accent/10 px-3 py-2.5">
+                    <p className="flex items-center gap-1 text-[10px] text-muted-foreground uppercase tracking-wider">
+                      <Hash className="h-3 w-3 text-brand-accent" />
+                      Keywords
+                    </p>
+                    <p className="text-3xl font-bold tabular-nums text-brand-accent">{stats.totalKeywords.toLocaleString()}</p>
                   </div>
-                  <div>
-                    <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Coverage</p>
-                    <p className="text-2xl font-bold tabular-nums">{servicesCovered} <span className="text-sm font-normal text-muted-foreground">/ {state.selectedServices.length}</span></p>
+                  <div className="rounded-md border border-border/70 bg-muted/20 px-3 py-2.5">
+                    <p className="flex items-center gap-1 text-[10px] text-muted-foreground uppercase tracking-wider">
+                      <Target className="h-3 w-3" />
+                      Coverage
+                    </p>
+                    <p className="text-3xl font-bold tabular-nums">{servicesCovered} <span className="text-sm font-normal text-muted-foreground">/ {state.selectedServices.length}</span></p>
                   </div>
                 </div>
                 {/* Highest Priority campaign */}
@@ -536,15 +548,19 @@ export function StepCampaign() {
                     const widthPct = Math.max((kwCount / maxKwCount) * 100, 4);
                     const barColor = campaign.priority ? priorityBarColors[campaign.priority] : 'bg-primary';
                     return (
-                      <div key={ci} className="flex items-center gap-2">
+                      <div
+                        key={ci}
+                        className="flex items-center gap-2"
+                        title={`${campaign.campaignName.replace('Service - ', '')}: ${kwCount.toLocaleString()} keywords`}
+                      >
                         <div className="w-[120px] min-w-[120px] text-right">
                           <span className="text-[11px] text-muted-foreground truncate block">
                             {campaign.campaignName.replace('Service - ', '')}
                           </span>
                         </div>
-                        <div className="flex-1 h-5 bg-muted/30 rounded overflow-hidden">
+                        <div className="flex-1 h-5 bg-muted/30 rounded-full overflow-hidden">
                           <div
-                            className={`h-full rounded transition-all duration-300 ${barColor}`}
+                            className={`h-full rounded-full transition-all duration-300 ${barColor}`}
                             style={{
                               width: `${widthPct}%`,
                               opacity: 0.6 + (kwCount / maxKwCount) * 0.4,
@@ -585,7 +601,7 @@ export function StepCampaign() {
 
       {/* Error state */}
       {error && (
-        <Card className="border-destructive/50 bg-destructive/5">
+        <Card className="border-destructive/40 border-l-4 border-l-destructive bg-destructive/5">
           <CardContent className="py-3">
             <div className="flex items-start gap-2">
               <AlertCircle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
@@ -861,6 +877,20 @@ export function StepCampaign() {
       {/* Export Action Cards */}
       {state.campaigns.length > 0 && (
         <div className="space-y-3">
+          <Card className="border-brand-accent/35 bg-gradient-to-r from-brand-accent/12 via-brand-accent/4 to-transparent">
+            <CardContent className="py-3.5 px-4 flex items-start gap-2.5">
+              <div className="rounded-full bg-brand-accent/20 p-1.5 shrink-0">
+                <CheckCircle2 className="h-4 w-4 text-brand-accent" />
+              </div>
+              <div>
+                <p className="text-sm font-semibold">Campaign package is ready</p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Choose your export path below. Every direct import is created as paused for safe review.
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {/* Card 1: Download for Google Ads Editor */}
             <Card className="border-2 border-brand-accent/30 bg-gradient-to-br from-brand-accent/5 to-transparent hover:border-brand-accent/50 transition-colors">
@@ -884,7 +914,7 @@ export function StepCampaign() {
             </Card>
 
             {/* Card 2: Import Directly to Google Ads */}
-            <Card className="border-2 hover:border-primary/50 transition-colors">
+            <Card className="border-2 bg-gradient-to-br from-muted/20 to-transparent hover:border-primary/50 transition-colors">
               <CardContent className="py-5 px-5 flex flex-col gap-3">
                 <div className="flex items-start gap-3">
                   <div className="rounded-md bg-primary/10 p-2 shrink-0">
@@ -920,25 +950,25 @@ export function StepCampaign() {
 
       {/* What's Next Guidance */}
       {state.campaigns.length > 0 && (
-        <Card className="bg-muted/30">
+        <Card className="bg-amber-50/45 border-amber-200/50 dark:bg-amber-950/20 dark:border-amber-900/50">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm flex items-center gap-2">
-              <ArrowRight className="h-4 w-4 text-primary" />
+              <ArrowRight className="h-4 w-4 text-brand-accent" />
               What&apos;s Next?
             </CardTitle>
           </CardHeader>
           <CardContent className="pt-0">
             <ul className="space-y-2 text-xs text-muted-foreground">
               <li className="flex items-start gap-2">
-                <span className="rounded-full bg-primary/20 text-primary text-[10px] font-bold h-4 w-4 flex items-center justify-center shrink-0 mt-0.5">1</span>
+                <CheckCircle2 className="h-4 w-4 text-brand-accent shrink-0 mt-0.5" />
                 <span>Download the Google Ads Editor CSV and import it for fine-tuning before going live</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="rounded-full bg-primary/20 text-primary text-[10px] font-bold h-4 w-4 flex items-center justify-center shrink-0 mt-0.5">2</span>
+                <CheckCircle2 className="h-4 w-4 text-brand-accent shrink-0 mt-0.5" />
                 <span>Or import directly to create paused campaigns you can review in Google Ads</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="rounded-full bg-primary/20 text-primary text-[10px] font-bold h-4 w-4 flex items-center justify-center shrink-0 mt-0.5">3</span>
+                <CheckCircle2 className="h-4 w-4 text-brand-accent shrink-0 mt-0.5" />
                 <span>Review your ad groups and adjust bids based on your competition level</span>
               </li>
             </ul>

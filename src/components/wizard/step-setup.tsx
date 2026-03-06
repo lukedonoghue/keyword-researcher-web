@@ -42,7 +42,7 @@ export function StepSetup() {
   };
 
   return (
-    <div className="space-y-4 max-w-xl">
+    <div className="space-y-6 max-w-4xl">
       <div>
         <h2 className="text-base font-semibold">Setup</h2>
         <p className="text-xs text-muted-foreground mt-0.5">

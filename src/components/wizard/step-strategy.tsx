@@ -15,24 +15,32 @@ import type { CampaignStrategy } from '@/lib/types/index';
 const presets: {
   label: string;
   description: string;
+  dailyHint: string;
+  tone: string;
   icon: typeof Shield;
   values: Partial<CampaignStrategy>;
 }[] = [
   {
     label: 'Conservative',
     description: 'Lower spend, high-intent only',
+    dailyHint: '~$33/day',
+    tone: 'bg-blue-50 border-blue-200 text-blue-700 dark:bg-blue-950/40 dark:border-blue-900 dark:text-blue-300',
     icon: Shield,
     values: { monthlyBudget: 1000, minVolume: 50, maxCpc: null, focusHighIntent: true, includeInformational: false },
   },
   {
     label: 'Balanced',
     description: 'Recommended defaults',
+    dailyHint: '~$66/day',
+    tone: 'bg-slate-100 border-slate-200 text-slate-700 dark:bg-slate-900/40 dark:border-slate-800 dark:text-slate-300',
     icon: Target,
     values: { monthlyBudget: 2000, minVolume: 10, maxCpc: null, focusHighIntent: false, includeInformational: false },
   },
   {
     label: 'Aggressive',
     description: 'Max reach, all intents',
+    dailyHint: '~$166/day',
+    tone: 'bg-amber-50 border-amber-200 text-amber-700 dark:bg-amber-950/40 dark:border-amber-900 dark:text-amber-300',
     icon: Zap,
     values: { monthlyBudget: 5000, minVolume: 10, maxCpc: null, focusHighIntent: false, includeInformational: true },
   },
@@ -58,7 +66,7 @@ export function StepStrategy() {
   };
 
   return (
-    <div className="space-y-4 max-w-xl">
+    <div className="space-y-6 max-w-4xl">
       <div>
         <h2 className="text-base font-semibold">Campaign Strategy</h2>
         <p className="text-xs text-muted-foreground mt-0.5">
@@ -78,15 +86,16 @@ export function StepStrategy() {
               key={preset.label}
               type="button"
               onClick={() => update(preset.values)}
-              className={`flex flex-col items-start gap-1 rounded-lg p-3 text-left transition-colors ${
+              className={`flex flex-col items-start gap-1 rounded-lg p-3 text-left transition-all duration-200 hover:scale-[1.02] ${
                 isMatch
                   ? 'border-2 border-brand-accent bg-brand-accent/5 shadow-sm dark:bg-brand-accent/10'
-                  : 'border border-border hover:border-muted-foreground/30 hover:bg-muted/30'
+                  : `border hover:border-muted-foreground/30 ${preset.tone}`
               }`}
             >
               <Icon className={`h-4 w-4 ${isMatch ? 'text-brand-accent' : 'text-muted-foreground'}`} />
               <span className="text-xs font-medium">{preset.label}</span>
               <span className="text-[11px] text-muted-foreground">{preset.description}</span>
+              <span className="text-[10px] font-medium text-muted-foreground">{preset.dailyHint}</span>
             </button>
           );
         })}

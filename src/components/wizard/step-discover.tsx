@@ -93,7 +93,7 @@ export function StepDiscover() {
   const businessTypeLabel = BUSINESS_TYPE_LABELS[state.businessType] || state.businessType || 'Business';
 
   return (
-    <div className="space-y-4 max-w-2xl">
+    <div className="space-y-6 max-w-4xl">
       <div>
         <h2 className="text-base font-semibold">Service Discovery</h2>
         <p className="text-xs text-muted-foreground mt-0.5">
@@ -105,29 +105,35 @@ export function StepDiscover() {
         <Card>
           <CardContent className="py-6 space-y-3">
             <div className="flex items-center gap-3">
-              <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+              <div className="h-4 w-4 animate-spin rounded-full border-2 border-brand-accent border-t-transparent" />
               <span className="text-sm text-muted-foreground">Analyzing website with Perplexity...</span>
             </div>
-            <div className="space-y-1.5 pl-7">
-              <p className="text-[11px] text-muted-foreground">Identifying business type and services</p>
-              <p className="text-[11px] text-muted-foreground">Detecting geographic service area</p>
-              <p className="text-[11px] text-muted-foreground">Generating seed keywords per service</p>
+            <div className="space-y-2 pl-7">
+              <div className="rounded-md border border-border/60 bg-muted/20 p-2 animate-pulse">
+                <p className="text-[11px] text-muted-foreground">Identifying business type and services</p>
+              </div>
+              <div className="rounded-md border border-border/60 bg-muted/20 p-2 animate-pulse [animation-delay:120ms]">
+                <p className="text-[11px] text-muted-foreground">Detecting geographic service area</p>
+              </div>
+              <div className="rounded-md border border-border/60 bg-muted/20 p-2 animate-pulse [animation-delay:240ms]">
+                <p className="text-[11px] text-muted-foreground">Generating seed keywords per service</p>
+              </div>
             </div>
           </CardContent>
         </Card>
       )}
 
       {error && (
-          <Card className="border-destructive/50 bg-destructive/5">
-            <CardContent className="py-3">
-              <div className="flex items-start gap-2">
-                <AlertCircle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
-                <p className="text-xs text-destructive">{error}</p>
-              </div>
-              <Button variant="outline" size="sm" className="mt-2 h-7 text-xs" onClick={handleRetry}>
-                Retry
-              </Button>
-            </CardContent>
+        <Card className="border-destructive/40 border-l-4 border-l-destructive bg-destructive/5">
+          <CardContent className="py-3">
+            <div className="flex items-start gap-2">
+              <AlertCircle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
+              <p className="text-xs text-destructive">{error}</p>
+            </div>
+            <Button variant="outline" size="sm" className="mt-2 h-7 text-xs" onClick={handleRetry}>
+              Retry
+            </Button>
+          </CardContent>
         </Card>
       )}
 

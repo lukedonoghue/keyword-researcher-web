@@ -99,7 +99,7 @@ export function StepResearch() {
   }, [state.selectedKeywords]);
 
   return (
-    <div className="space-y-4 max-w-xl">
+    <div className="space-y-6 max-w-4xl">
       <div>
         <h2 className="text-base font-semibold">Keyword Research</h2>
         <p className="text-xs text-muted-foreground mt-0.5">
@@ -263,7 +263,7 @@ export function StepResearch() {
       })()}
 
       {error && (
-        <Card className="border-destructive/50 bg-destructive/5">
+        <Card className="border-destructive/40 border-l-4 border-l-destructive bg-destructive/5">
           <CardContent className="py-3">
             <div className="flex items-start gap-2">
               <AlertCircle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
