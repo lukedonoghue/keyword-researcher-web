@@ -10,7 +10,7 @@ import packageJson from '../../../package.json';
 
 export function Header() {
   const { authenticated, customerId, logout } = useAuth();
-  const { theme, mounted, toggleTheme } = useTheme();
+  const { theme, toggleTheme } = useTheme();
   const fallbackBuild = typeof packageJson.version === 'string' ? `v${packageJson.version}` : 'v0.0.0';
   const [buildLabel, setBuildLabel] = useState<string>(fallbackBuild);
 
@@ -38,7 +38,7 @@ export function Header() {
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2">
             <Image
-              src={mounted && theme === 'dark' ? '/grow-my-ads-logo-alt.png' : '/grow-my-ads-logo.png'}
+              src={theme === 'dark' ? '/grow-my-ads-logo-alt.png' : '/grow-my-ads-logo.png'}
               alt="Grow My Ads"
               width={120}
               height={28}
@@ -60,7 +60,7 @@ export function Header() {
             BUILD {buildLabel}
           </span>
           <Button variant="ghost" size="sm" onClick={toggleTheme} className="h-7 w-7 p-0">
-            {mounted && theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+            {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
           </Button>
           {authenticated && (
             <Button variant="ghost" size="sm" onClick={logout} className="h-7 text-xs">

@@ -365,7 +365,6 @@ export function CampaignDataTable({ campaigns }: { campaigns: CampaignStructureV
 
   const [keywordFilter, setKeywordFilter] = useState('');
   const [campaignFilter, setCampaignFilter] = useState('all');
-  const [priorityFilter, setPriorityFilter] = useState('all');
   const [adGroupPriorityFilter, setAdGroupPriorityFilter] = useState('core+recommended');
   const [matchTypeFilter, setMatchTypeFilter] = useState('all');
   const [colVisibility, setColVisibility] = useState(defaultColumnVisibility);
@@ -374,9 +373,6 @@ export function CampaignDataTable({ campaigns }: { campaigns: CampaignStructureV
     let result = rows;
     if (campaignFilter !== 'all') {
       result = result.filter((r) => r.campaign === campaignFilter);
-    }
-    if (priorityFilter !== 'all') {
-      result = result.filter((r) => r.priority === priorityFilter);
     }
     if (adGroupPriorityFilter === 'core+recommended') {
       result = result.filter((r) => r.adGroupPriority !== 'additional');
@@ -391,7 +387,7 @@ export function CampaignDataTable({ campaigns }: { campaigns: CampaignStructureV
       result = result.filter((r) => r.keyword.toLowerCase().includes(lower));
     }
     return result;
-  }, [rows, campaignFilter, priorityFilter, adGroupPriorityFilter, matchTypeFilter, keywordFilter]);
+  }, [rows, campaignFilter, adGroupPriorityFilter, matchTypeFilter, keywordFilter]);
 
   // Group rows by campaign > ad group for display
   const groupedData = useMemo(() => {

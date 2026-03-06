@@ -523,7 +523,7 @@ export function StepCampaign() {
         const campEstLow = campaignAvgCpc * campaignTotalVolume * 0.02;
         const campEstHigh = campaignAvgCpc * campaignTotalVolume * 0.05;
 
-        const renderAdGroup = (adGroup: typeof campaign.adGroups[number], agi: number, defaultOpen: boolean) => {
+        const renderAdGroup = (adGroup: typeof campaign.adGroups[number], agi: number) => {
           const agKwCount = adGroup.subThemes.reduce((s, st) => s + st.keywords.length, 0);
           return (
             <AccordionItem key={agi} value={`ag-${ci}-${agi}`}>
@@ -681,7 +681,7 @@ export function StepCampaign() {
             <CardContent className="pt-0">
               {/* Core + Recommended ad groups (expanded) */}
               <Accordion type="multiple" defaultValue={mainGroups.map((_, agi) => `ag-${ci}-${agi}`)} className="w-full">
-                {mainGroups.map((adGroup, agi) => renderAdGroup(adGroup, agi, true))}
+                {mainGroups.map((adGroup, agi) => renderAdGroup(adGroup, agi))}
               </Accordion>
 
               {/* Additional Opportunities (collapsed) */}
@@ -701,7 +701,7 @@ export function StepCampaign() {
                   {showAdditional && (
                     <div className="border-t px-2">
                       <Accordion type="multiple" className="w-full">
-                        {additionalGroups.map((adGroup, agi) => renderAdGroup(adGroup, mainGroups.length + agi, false))}
+                        {additionalGroups.map((adGroup, agi) => renderAdGroup(adGroup, mainGroups.length + agi))}
                       </Accordion>
                     </div>
                   )}
