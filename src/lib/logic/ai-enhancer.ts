@@ -1,14 +1,22 @@
 import { OpenRouterService } from '../services/openrouter';
-import type { SeedKeyword, SuppressedKeyword, KeywordIntent, CampaignStrategy } from '../types/index';
+import type {
+  SeedKeyword,
+  SuppressedKeyword,
+  KeywordIntent,
+  CampaignStrategy,
+  NegativeKeywordListItem,
+} from '../types/index';
 import { getKeywordQualityScore } from './quality-score';
 import { dedupeSeedKeywords } from './keyword-merge';
+import { normalizeKeywordText } from './keyword-signals';
 
 const BATCH_SIZE = 80;
 const MAX_CONCURRENT_BATCHES = 4;
-const DEFAULT_ENHANCE_MODEL = process.env.OPENROUTER_ENHANCE_MODEL?.trim() || 'google/gemini-3.1-pro-preview';
+const DEFAULT_ENHANCE_MODEL = process.env.OPENROUTER_ENHANCE_MODEL?.trim() || 'google/gemini-3-flash-preview';
+const AI_REVIEW_TEMPERATURE = 0.1;
 
-function createEnhanceClient(apiKey: string): OpenRouterService {
-  return new OpenRouterService(apiKey, DEFAULT_ENHANCE_MODEL);
+function createEnhanceClient(apiKey: string, model?: string): OpenRouterService {
+  return new OpenRouterService(apiKey, model?.trim() || DEFAULT_ENHANCE_MODEL);
 }
 
 export type AiEnhanceProgress = {
@@ -47,6 +55,22 @@ type ThemeCluster = { clusterName: string; service: string; keywords: string[] }
 type ThemePassResult = { clusters: ThemeCluster[] };
 type QualityAdjustment = { text: string; adjustment: number; reason: string };
 type QualityPassResult = { adjustments: QualityAdjustment[] };
+type NegativeSuggestionCategory = 'employment' | 'support' | 'diy' | 'forum' | 'low_quality' | 'irrelevant_adjacent';
+type NegativeSuggestion = {
+  keyword: string;
+  matchType: 'Phrase' | 'Exact';
+  category: NegativeSuggestionCategory;
+  reason: string;
+};
+type NegativePassResult = { items: NegativeSuggestion[] };
+
+export type NegativeKeywordPhaseResult = {
+  items: NegativeKeywordListItem[];
+  stats: {
+    model: string;
+    totalTokens: number;
+  };
+};
 
 function chunkArray<T>(arr: T[], size: number): T[][] {
   const chunks: T[][] = [];
@@ -83,14 +107,50 @@ function extractKeywords(map: Map<string, SeedKeyword>): SeedKeyword[] {
   return Array.from(map.values());
 }
 
+function normalizeNegativeSuggestion(
+  suggestion: NegativeSuggestion,
+  services: string[],
+): NegativeKeywordListItem | null {
+  const keyword = normalizeKeywordText(suggestion.keyword);
+  if (!keyword) return null;
+
+  const overlapsCoreService = services.some((service) => {
+    const normalizedService = normalizeKeywordText(service);
+    if (!normalizedService) return false;
+    return keyword === normalizedService || keyword.includes(normalizedService);
+  });
+
+  if (
+    overlapsCoreService &&
+    !/\b(job|jobs|career|careers|salary|login|support|account|free|cheap|cheapest|used|forum|reddit|youtube|diy|how to|tutorial)\b/i.test(keyword)
+  ) {
+    return null;
+  }
+
+  const matchType =
+    suggestion.matchType === 'Exact' || /\b(license|licence)\b/i.test(keyword)
+      ? 'Exact'
+      : 'Phrase';
+
+  return {
+    keyword,
+    matchType,
+    enabled: true,
+    reasons: [suggestion.reason.trim() || `AI review: ${suggestion.category}`],
+    source: 'ai_review',
+    occurrences: 1,
+  };
+}
+
 // --- Phase 1: Intent Classification ---
 export async function runIntentPhase(
   keywords: SeedKeyword[],
   services: string[],
   targetDomain: string,
   apiKey: string,
+  selectedModel?: string,
 ): Promise<PhaseResult> {
-  const client = createEnhanceClient(apiKey);
+  const client = createEnhanceClient(apiKey, selectedModel);
   if (!client.isAvailable()) {
     return { keywords, stats: { model: '', intentChanges: 0, themesReassigned: 0, negativesReclassified: 0, qualityAdjustments: 0, totalTokens: 0 } };
   }
@@ -109,9 +169,13 @@ export async function runIntentPhase(
     try {
       const { data, usage } = await client.jsonPrompt<IntentPassResult>(
         `You are a PPC keyword intent classifier for a ${targetDomain} business offering these services: ${services.join(', ')}.
-Classify each keyword's search intent and detect negative/irrelevant keywords.
+Classify each keyword's search intent and detect truly negative/irrelevant keywords for Google Ads.
+Set isNegative=true only for clear exclusion intent such as competitor brand queries, jobs/careers, DIY/research-only terms, support/login/account terms, used/free terms, or obviously unrelated topics.
+Do NOT mark a keyword negative only because it is informational, comparison, review-oriented, pricing-related, or early-funnel if it is still relevant to the service.
+Preserve service-adjacent category terms that could belong in a catch-all or specialist ad group. Those terms should be routed later, not suppressed here.
 Return JSON: { "keywords": [{ "text": string, "intent": "transactional"|"commercial"|"informational"|"navigational", "confidence": 0-1, "reason": string, "isNegative": boolean }] }`,
         JSON.stringify(batch),
+        AI_REVIEW_TEMPERATURE,
       );
       totalTokens += usage.totalTokens;
       for (const item of data.keywords) {
@@ -144,8 +208,9 @@ export async function runThemesPhase(
   keywords: SeedKeyword[],
   services: string[],
   apiKey: string,
+  selectedModel?: string,
 ): Promise<PhaseResult> {
-  const client = createEnhanceClient(apiKey);
+  const client = createEnhanceClient(apiKey, selectedModel);
   if (!client.isAvailable()) {
     return { keywords, stats: { model: '', intentChanges: 0, themesReassigned: 0, negativesReclassified: 0, qualityAdjustments: 0, totalTokens: 0 } };
   }
@@ -165,6 +230,7 @@ Group keywords into semantic clusters of 3-15 keywords each. Match each cluster 
 Return JSON: { "clusters": [{ "clusterName": string, "service": string, "keywords": string[] }] }
 Every input keyword must appear in exactly one cluster.`,
         JSON.stringify(batch.map((item) => item.text)),
+        AI_REVIEW_TEMPERATURE,
       );
       totalTokens += usage.totalTokens;
       for (const cluster of data.clusters) {
@@ -195,8 +261,9 @@ export async function runQualityPhase(
   targetDomain: string,
   strategy: CampaignStrategy | null,
   apiKey: string,
+  selectedModel?: string,
 ): Promise<PhaseResult> {
-  const client = createEnhanceClient(apiKey);
+  const client = createEnhanceClient(apiKey, selectedModel);
   if (!client.isAvailable()) {
     return { keywords, stats: { model: '', intentChanges: 0, themesReassigned: 0, negativesReclassified: 0, qualityAdjustments: 0, totalTokens: 0 } };
   }
@@ -225,6 +292,7 @@ ${strategyContext}
 Review keywords where the heuristic quality score seems wrong. Only return adjustments for keywords that need them.
 Return JSON: { "adjustments": [{ "text": string, "adjustment": number (-15 to +15), "reason": string }] }`,
         JSON.stringify(batch),
+        AI_REVIEW_TEMPERATURE,
       );
       totalTokens += usage.totalTokens;
       for (const adj of data.adjustments) {
@@ -262,6 +330,82 @@ Return JSON: { "adjustments": [{ "text": string, "adjustment": number (-15 to +1
     keywords: extractKeywords(keywordMap),
     stats: { model, intentChanges: 0, themesReassigned: 0, negativesReclassified: 0, qualityAdjustments, totalTokens },
   };
+}
+
+export async function runNegativeKeywordPhase(
+  suppressedKeywords: SuppressedKeyword[],
+  services: string[],
+  targetDomain: string,
+  businessName: string | undefined,
+  businessDescription: string | undefined,
+  apiKey: string,
+  selectedModel?: string,
+): Promise<NegativeKeywordPhaseResult> {
+  const client = createEnhanceClient(apiKey, selectedModel);
+  if (!client.isAvailable() || suppressedKeywords.length === 0) {
+    return { items: [], stats: { model: '', totalTokens: 0 } };
+  }
+
+  const model = client.getModel();
+  const candidateKeywords = suppressedKeywords
+    .slice()
+    .sort((a, b) => b.volume - a.volume || a.cpc - b.cpc)
+    .slice(0, 80)
+    .map((kw) => ({
+      text: kw.text,
+      intent: kw.intent || 'unknown',
+      reasons: kw.suppressionReasons,
+      volume: kw.volume,
+      cpc: kw.cpc,
+    }));
+
+  try {
+    const { data, usage } = await client.jsonPrompt<NegativePassResult>(
+      `You are a Google Ads negative keyword strategist for ${businessName || targetDomain || 'this business'}.
+Business domain: ${targetDomain || 'unknown'}
+Business description: ${businessDescription || 'not provided'}
+Primary services: ${services.join(', ') || 'not provided'}
+
+Review suppressed keywords and return ONLY safe campaign-level negatives for junk, low-quality, non-buying, or clearly irrelevant adjacent intent.
+Valid categories:
+- employment: jobs, careers, salary, internship
+- support: login, support, account, FAQ, contact/support intent
+- diy: how to, tutorial, DIY, guide
+- forum: reddit, youtube, wiki, forum
+- low_quality: cheap, free, used, second hand
+- irrelevant_adjacent: adjacent products/software/content that are clearly not the offered service
+
+Do NOT return:
+- core service queries
+- pricing/comparison queries that still indicate buying intent
+- routing/funneling terms that belong in another ad group
+- category terms that should stay targetable
+
+Return JSON:
+{ "items": [{ "keyword": string, "matchType": "Phrase" | "Exact", "category": "employment" | "support" | "diy" | "forum" | "low_quality" | "irrelevant_adjacent", "reason": string }] }
+
+Keep the list short and high-confidence. Prefer Phrase. Use Exact only for ambiguous single words.`,
+      JSON.stringify(candidateKeywords),
+      AI_REVIEW_TEMPERATURE,
+    );
+
+    const deduped = new Map<string, NegativeKeywordListItem>();
+    for (const suggestion of data.items ?? []) {
+      const normalized = normalizeNegativeSuggestion(suggestion, services);
+      if (!normalized) continue;
+      const key = `${normalized.keyword}|||${normalized.matchType}`;
+      if (!deduped.has(key)) {
+        deduped.set(key, normalized);
+      }
+    }
+
+    return {
+      items: Array.from(deduped.values()),
+      stats: { model, totalTokens: usage.totalTokens },
+    };
+  } catch {
+    return { items: [], stats: { model, totalTokens: 0 } };
+  }
 }
 
 // --- Merge: apply strategy filters and dedupe ---

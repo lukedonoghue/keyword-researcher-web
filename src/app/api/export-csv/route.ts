@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { generateCampaignCsv, type CsvFormat } from '@/lib/csv/generate';
-import type { CampaignStructureV2, NegativeKeyword } from '@/lib/types/index';
+import type { CampaignStructureV2, NegativeKeyword, NegativeKeywordList } from '@/lib/types/index';
 import { getErrorMessage } from '@/lib/utils';
 
 export async function POST(request: NextRequest) {
@@ -10,6 +10,7 @@ export async function POST(request: NextRequest) {
       defaultUrl?: string;
       format?: CsvFormat;
       negativeKeywords?: NegativeKeyword[];
+      negativeKeywordLists?: NegativeKeywordList[];
       settings?: Record<string, unknown>;
     };
     const campaigns = Array.isArray(payload.campaigns) ? payload.campaigns : [];
@@ -18,19 +19,28 @@ export async function POST(request: NextRequest) {
       ? 'analysis'
       : payload.format === 'diagnostic'
         ? 'diagnostic'
+        : payload.format === 'negative-lists'
+          ? 'negative-lists'
+          : payload.format === 'negative-list-assignments'
+            ? 'negative-list-assignments'
         : 'google-ads-editor';
     const negativeKeywords = Array.isArray(payload.negativeKeywords) ? payload.negativeKeywords : [];
+    const negativeKeywordLists = Array.isArray(payload.negativeKeywordLists) ? payload.negativeKeywordLists : [];
     const settings = payload.settings && typeof payload.settings === 'object' ? payload.settings : {};
 
     if (!campaigns.length) {
       return NextResponse.json({ error: 'Campaign data is required' }, { status: 400 });
     }
 
-    const csv = generateCampaignCsv(campaigns, defaultUrl, format, negativeKeywords, settings);
+    const csv = generateCampaignCsv(campaigns, defaultUrl, format, negativeKeywords, negativeKeywordLists, settings);
     const filename = format === 'analysis'
       ? 'campaign_analysis.csv'
       : format === 'diagnostic'
         ? 'campaign_diagnostic_snapshot.csv'
+        : format === 'negative-lists'
+          ? 'negative_keyword_lists.csv'
+          : format === 'negative-list-assignments'
+            ? 'negative_keyword_assignments.csv'
         : 'google_ads_editor_import.csv';
 
     return new NextResponse(csv, {

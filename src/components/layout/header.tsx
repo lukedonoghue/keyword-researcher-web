@@ -10,7 +10,7 @@ import packageJson from '../../../package.json';
 
 export function Header() {
   const { authenticated, customerId, logout } = useAuth();
-  const { theme, toggleTheme } = useTheme();
+  const { toggleTheme } = useTheme();
   const fallbackBuild = typeof packageJson.version === 'string' ? `v${packageJson.version}` : 'v0.0.0';
   const [buildLabel, setBuildLabel] = useState<string>(fallbackBuild);
 
@@ -39,11 +39,19 @@ export function Header() {
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2">
             <Image
-              src={theme === 'dark' ? '/grow-my-ads-logo-alt.png' : '/grow-my-ads-logo.png'}
+              src="/grow-my-ads-logo.png"
               alt="Grow My Ads"
               width={120}
               height={28}
-              className="h-7 w-auto"
+              className="h-7 w-auto dark:hidden"
+              priority
+            />
+            <Image
+              src="/grow-my-ads-logo-alt.png"
+              alt="Grow My Ads"
+              width={120}
+              height={28}
+              className="hidden h-7 w-auto dark:block"
               priority
             />
             <span className="text-[10px] font-medium text-muted-foreground border border-border rounded px-1.5 py-0.5 leading-none">
@@ -60,8 +68,9 @@ export function Header() {
           <span className="text-[10px] font-medium text-muted-foreground/80 tracking-wide">
             build {buildLabel}
           </span>
-          <Button variant="ghost" size="sm" onClick={toggleTheme} className="h-7 w-7 p-0">
-            {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+          <Button variant="ghost" size="sm" onClick={toggleTheme} className="h-7 w-7 p-0" aria-label="Toggle theme">
+            <Moon className="h-4 w-4 dark:hidden" />
+            <Sun className="hidden h-4 w-4 dark:block" />
           </Button>
           {authenticated && (
             <Button variant="ghost" size="sm" onClick={logout} className="h-7 text-xs">

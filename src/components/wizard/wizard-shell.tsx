@@ -25,9 +25,10 @@ export function WizardShell() {
   };
 
   const StepComponent = stepComponents[state.currentStep];
+  const widthClass = state.currentStep === 'campaign' ? 'max-w-[1600px]' : 'max-w-4xl';
 
   return (
-    <div className="mx-auto max-w-4xl px-4 py-8">
+    <div className={`mx-auto ${widthClass} px-4 py-8`}>
       <div key={state.currentStep} className="animate-step-enter">
         <StepComponent />
       </div>

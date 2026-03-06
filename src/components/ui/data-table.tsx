@@ -18,6 +18,7 @@ import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, ChevronDown } f
 interface GroupInfo<TData> {
   campaign: string;
   priority: string;
+  adGroupPriority?: string;
   adGroup: string;
   rows: TData[];
 }
@@ -30,6 +31,7 @@ interface DataTableProps<TData, TValue> {
   defaultColumnVisibility?: VisibilityState;
   defaultPageSize?: number;
   toolbar?: React.ReactNode;
+  hideCampaignLabelInGroups?: boolean;
 }
 
 export function DataTable<TData, TValue>({
@@ -40,6 +42,7 @@ export function DataTable<TData, TValue>({
   defaultColumnVisibility = {},
   defaultPageSize = 50,
   toolbar,
+  hideCampaignLabelInGroups = false,
 }: DataTableProps<TData, TValue>) {
   const [sorting, setSorting] = React.useState<SortingState>(defaultSorting);
   const [columnVisibility, setColumnVisibility] = React.useState<VisibilityState>(defaultColumnVisibility);
@@ -116,7 +119,7 @@ export function DataTable<TData, TValue>({
     const start = clampedPageIndex * pageSize;
     const end = start + pageSize;
     let runningIdx = 0;
-    const result: { campaign: string; priority: string; adGroup: string; rows: TData[]; isPartial: boolean }[] = [];
+    const result: { campaign: string; priority: string; adGroupPriority?: string; adGroup: string; rows: TData[]; isPartial: boolean }[] = [];
 
     for (const group of groupedSorted) {
       const groupStart = runningIdx;
@@ -187,10 +190,23 @@ export function DataTable<TData, TValue>({
                         <TableCell colSpan={colCount} className="py-1 px-2">
                           <div className="flex items-center gap-2 text-[11px]">
                             <ChevronDown className={`h-3.5 w-3.5 text-muted-foreground transition-transform ${isExpanded ? '' : '-rotate-90'}`} />
-                            <span className="font-semibold">{campaignShort}</span>
-                            <span className="text-muted-foreground">/</span>
-                            <span className="font-medium">{group.adGroup}</span>
+                            {!hideCampaignLabelInGroups && (
+                              <>
+                                <span className="font-semibold">{campaignShort}</span>
+                                <span className="text-muted-foreground">/</span>
+                              </>
+                            )}
+                            <span className="font-medium break-words">{group.adGroup}</span>
                             <span className="text-muted-foreground ml-1">({group.rows.length} kw)</span>
+                            {group.adGroupPriority && (
+                              <span className={`text-[9px] px-1.5 py-0 rounded-full font-medium ${
+                                group.adGroupPriority === 'core' ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300'
+                                : group.adGroupPriority === 'recommended' ? 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300'
+                                : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400'
+                              }`}>
+                                {group.adGroupPriority.charAt(0).toUpperCase() + group.adGroupPriority.slice(1)}
+                              </span>
+                            )}
                             {group.priority && (
                               <span className={`text-[9px] px-1.5 py-0 rounded-full font-medium ${
                                 group.priority === 'high' ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300'
@@ -208,9 +224,9 @@ export function DataTable<TData, TValue>({
                         const row = sortedRows.find((r) => r.original === item);
                         if (!row) return null;
                         return (
-                          <TableRow key={`${key}-${rowIdx}`} className="h-7">
+                          <TableRow key={`${key}-${rowIdx}`} className="h-7 align-top">
                             {row.getVisibleCells().map((cell) => (
-                              <TableCell key={cell.id} className="text-[11px] py-0.5 px-2">
+                              <TableCell key={cell.id} className="text-[11px] py-1 px-2 align-top">
                                 {flexRender(cell.column.columnDef.cell, cell.getContext())}
                               </TableCell>
                             ))}
@@ -231,9 +247,9 @@ export function DataTable<TData, TValue>({
               // Flat rendering
               pagedRows.length ? (
                 pagedRows.map((row) => (
-                  <TableRow key={row.id} className="h-7">
+                  <TableRow key={row.id} className="h-7 align-top">
                     {row.getVisibleCells().map((cell) => (
-                      <TableCell key={cell.id} className="text-[11px] py-0.5 px-2">
+                      <TableCell key={cell.id} className="text-[11px] py-1 px-2 align-top">
                         {flexRender(cell.column.columnDef.cell, cell.getContext())}
                       </TableCell>
                     ))}

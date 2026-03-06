@@ -34,6 +34,7 @@ export async function POST(request: NextRequest) {
       businessName: result.businessName,
       businessDescription: result.businessDescription,
       businessType: result.businessType,
+      messagingProfile: result.messagingProfile,
       services: result.services,
       serviceArea: hasServiceAreaData ? result.serviceArea : null,
       contextTerms: result.contextTerms,

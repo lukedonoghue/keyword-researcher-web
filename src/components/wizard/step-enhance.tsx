@@ -10,12 +10,14 @@ import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { AlertCircle } from 'lucide-react';
 import type { KeywordIntent } from '@/lib/types/index';
+import { cn } from '@/lib/utils';
 import { PhaseRow } from './phase-row';
 
 export function StepEnhance() {
   const { state, dispatch } = useWorkflow();
   const { enhanceKeywords, isProcessing, error } = useWorkflowData();
   const [phase, setPhase] = useState<'intent' | 'themes' | 'quality' | 'done'>('intent');
+  const [selectedIntent, setSelectedIntent] = useState<KeywordIntent | 'unknown' | 'all'>('all');
   const startedRef = useRef(false);
 
   const runEnhance = useCallback(async (force: boolean = false) => {
@@ -59,12 +61,23 @@ export function StepEnhance() {
     return Object.entries(counts).sort((a, b) => b[1] - a[1]);
   }, [state.enhancedKeywords]);
 
+  const activeIntent = useMemo(() => {
+    if (selectedIntent === 'all') return 'all';
+    const stillExists = state.enhancedKeywords.some((kw) => (kw.intent || 'unknown') === selectedIntent);
+    return stillExists ? selectedIntent : 'all';
+  }, [selectedIntent, state.enhancedKeywords]);
+
   const topEnhanced = useMemo(() => {
-    return state.enhancedKeywords
+    const filtered =
+      activeIntent === 'all'
+        ? state.enhancedKeywords
+        : state.enhancedKeywords.filter((kw) => (kw.intent || 'unknown') === activeIntent);
+
+    return filtered
       .slice()
       .sort((a, b) => (b.qualityScore ?? 0) - (a.qualityScore ?? 0))
       .slice(0, 5);
-  }, [state.enhancedKeywords]);
+  }, [activeIntent, state.enhancedKeywords]);
 
   const intentBadgeVariant = (intent: string): 'default' | 'secondary' | 'outline' | 'destructive' => {
     switch (intent as KeywordIntent) {
@@ -110,52 +123,88 @@ export function StepEnhance() {
 
             {intentBreakdown.length > 0 && (
               <div className="flex flex-wrap gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setSelectedIntent('all')}
+                  className={cn(
+                    'inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] transition-colors',
+                    activeIntent === 'all'
+                      ? 'border-brand-accent bg-brand-accent text-brand-foreground'
+                      : 'border-border bg-background text-muted-foreground hover:border-brand-accent/50 hover:text-foreground'
+                  )}
+                >
+                  All intents
+                </button>
                 {intentBreakdown.map(([intent, count]) => (
-                  <Badge key={intent} variant={intentBadgeVariant(intent)} className="text-[11px]">
-                    {count} {intent}
-                  </Badge>
+                  <button
+                    key={intent}
+                    type="button"
+                    onClick={() => setSelectedIntent(intent as KeywordIntent | 'unknown')}
+                    className={cn(
+                      'rounded-full transition-transform hover:scale-[1.02] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+                      activeIntent === intent ? 'ring-2 ring-brand-accent/60 ring-offset-1 ring-offset-green-50 dark:ring-offset-green-950/40' : ''
+                    )}
+                  >
+                    <Badge variant={intentBadgeVariant(intent)} className="cursor-pointer text-[11px]">
+                      {count} {intent}
+                    </Badge>
+                  </button>
                 ))}
               </div>
             )}
 
             {topEnhanced.length > 0 && (
               <div className="space-y-1.5">
-                <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Top keywords by quality</p>
+                <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
+                  Top keywords by quality {activeIntent === 'all' ? '' : `- ${activeIntent}`}
+                </p>
                 <div className="rounded-md border border-green-200 dark:border-green-900 overflow-hidden">
-                  <Table>
-                    <TableHeader>
-                      <TableRow className="bg-green-100/50 dark:bg-green-900/30">
-                        <TableHead className="text-[11px] h-7 py-0">Keyword</TableHead>
-                        <TableHead className="text-[11px] h-7 py-0 text-right">Intent</TableHead>
-                        <TableHead className="text-[11px] h-7 py-0 text-right">Quality</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {topEnhanced.map((kw) => (
-                        <TableRow key={kw.text} className="bg-white/50 dark:bg-transparent">
-                          <TableCell className="text-xs py-1.5">{kw.text}</TableCell>
-                          <TableCell className="text-xs py-1.5 text-right">
-                            <Badge variant={intentBadgeVariant(kw.intent || 'unknown')} className="text-[10px] px-1.5 py-0">
-                              {kw.intent || 'unknown'}
-                            </Badge>
-                          </TableCell>
-                          <TableCell className="text-xs py-1.5 text-right tabular-nums">{kw.qualityRating ?? '-'}</TableCell>
+                  <div className="md:hidden divide-y divide-green-200 dark:divide-green-900">
+                    {topEnhanced.map((kw) => (
+                      <div key={kw.text} className="bg-white/70 dark:bg-transparent px-3 py-2.5 space-y-1.5">
+                        <p className="text-xs font-medium">{kw.text}</p>
+                        <div className="flex items-center justify-between gap-2">
+                          <Badge variant={intentBadgeVariant(kw.intent || 'unknown')} className="text-[10px] px-1.5 py-0">
+                            {kw.intent || 'unknown'}
+                          </Badge>
+                          <span className="text-xs font-medium tabular-nums">{kw.qualityRating ?? '-'}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="hidden md:block">
+                    <Table>
+                      <TableHeader>
+                        <TableRow className="bg-green-100/50 dark:bg-green-900/30">
+                          <TableHead className="text-[11px] h-7 py-0">Keyword</TableHead>
+                          <TableHead className="text-[11px] h-7 py-0 text-right">Intent</TableHead>
+                          <TableHead className="text-[11px] h-7 py-0 text-right">Quality</TableHead>
                         </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
+                      </TableHeader>
+                      <TableBody>
+                        {topEnhanced.map((kw) => (
+                          <TableRow key={kw.text} className="bg-white/50 dark:bg-transparent">
+                            <TableCell className="text-xs py-1.5">{kw.text}</TableCell>
+                            <TableCell className="text-xs py-1.5 text-right">
+                              <Badge variant={intentBadgeVariant(kw.intent || 'unknown')} className="text-[10px] px-1.5 py-0">
+                                {kw.intent || 'unknown'}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="text-xs py-1.5 text-right tabular-nums">{kw.qualityRating ?? '-'}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
                 </div>
               </div>
             )}
+            {topEnhanced.length === 0 && (
+              <div className="rounded-md border border-dashed border-green-200 dark:border-green-900 px-3 py-4 text-xs text-muted-foreground">
+                No keywords matched the selected intent filter.
+              </div>
+            )}
 
-            <Button
-              variant="brand"
-              size="sm"
-              className="w-full h-9"
-              onClick={() => dispatch({ type: 'SET_STEP', step: 'review' })}
-            >
-              Review Keywords
-            </Button>
           </CardContent>
         </Card>
       )}
@@ -198,7 +247,7 @@ export function StepEnhance() {
           <Button
             variant="brand"
             size="sm"
-            className="h-8"
+            className="h-9 flex-1"
             onClick={() => dispatch({ type: 'SET_STEP', step: 'review' })}
           >
             Review Keywords

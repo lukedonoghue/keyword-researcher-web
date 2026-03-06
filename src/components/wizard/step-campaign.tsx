@@ -18,6 +18,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
 import { Download, Upload, Pencil, FileSpreadsheet, ArrowRight, ChevronRight, Settings2, TableIcon, List, MapPin, AlertCircle, Hash, CheckCircle2, Target } from 'lucide-react';
 import { Progress } from '@/components/ui/progress';
 import { calculateBudgetTiers, estimatedDailyClicks, estimatedMonthlyConversions } from '@/lib/logic/budget-calculator';
@@ -27,7 +28,8 @@ import { GeoLocationPicker } from './geo-location-picker';
 import { PhaseRow } from './phase-row';
 import { GEO_CONSTANTS } from '@/lib/data/geoConstants';
 import type { GeoLocationSuggestion } from '@/lib/types/geo';
-import type { CampaignStructureV2, AdGroupPriority } from '@/lib/types/index';
+import type { CampaignMatchTypeStrategy, CampaignStructureV2, AdGroupPriority, ResponsiveSearchAd } from '@/lib/types/index';
+import { downloadResponseFile } from '@/lib/utils';
 
 const priorityColors = {
   high: 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300',
@@ -111,6 +113,70 @@ function getCampaignAvgCpc(campaign: CampaignStructureV2, kwCount: number) {
   ) / kwCount;
 }
 
+function formatMatchTypeStrategy(strategy: CampaignMatchTypeStrategy): string {
+  if (strategy === 'exact_only') return 'Exact only';
+  if (strategy === 'phrase_only') return 'Phrase only';
+  return 'Exact + Phrase';
+}
+
+type RsaEditorDraft = {
+  headlines: string[];
+  descriptions: string[];
+  path1: string;
+  path2: string;
+};
+
+type AdGroupRsaRecord = {
+  campaignIndex: number;
+  adGroupIndex: number;
+  campaignName: string;
+  adGroupName: string;
+  landingPage?: string;
+  rsa: ResponsiveSearchAd;
+};
+
+function createRsaDraft(rsa?: ResponsiveSearchAd): RsaEditorDraft {
+  return {
+    headlines: Array.from({ length: 8 }, (_, index) => rsa?.headlines[index] ?? ''),
+    descriptions: Array.from({ length: 4 }, (_, index) => rsa?.descriptions[index] ?? ''),
+    path1: rsa?.path1 ?? '',
+    path2: rsa?.path2 ?? '',
+  };
+}
+
+function validateRsaDraft(draft: RsaEditorDraft): string[] {
+  const errors: string[] = [];
+  const headlines = draft.headlines.map((value) => value.trim()).filter(Boolean);
+  const descriptions = draft.descriptions.map((value) => value.trim()).filter(Boolean);
+
+  if (headlines.length < 3) {
+    errors.push('At least 3 headlines are required.');
+  }
+  if (descriptions.length < 2) {
+    errors.push('At least 2 descriptions are required.');
+  }
+
+  headlines.forEach((headline, index) => {
+    if (headline.length > 30) {
+      errors.push(`Headline ${index + 1} exceeds 30 characters.`);
+    }
+  });
+  descriptions.forEach((description, index) => {
+    if (description.length > 90) {
+      errors.push(`Description ${index + 1} exceeds 90 characters.`);
+    }
+  });
+
+  if (draft.path1.trim().length > 15) {
+    errors.push('Path 1 exceeds 15 characters.');
+  }
+  if (draft.path2.trim().length > 15) {
+    errors.push('Path 2 exceeds 15 characters.');
+  }
+
+  return Array.from(new Set(errors));
+}
+
 export function StepCampaign() {
   const { state, dispatch } = useWorkflow();
   const { buildCampaign, rerunPipeline, isProcessing, error } = useWorkflowData();
@@ -127,6 +193,10 @@ export function StepCampaign() {
   const [geoDialogOpen, setGeoDialogOpen] = useState(false);
   const [rerunPhase, setRerunPhase] = useState<string | null>(null);
   const [rerunError, setRerunError] = useState<string | null>(null);
+  const [rsaEditorOpen, setRsaEditorOpen] = useState(false);
+  const [editingRsaTarget, setEditingRsaTarget] = useState<{ campaignIndex: number; adGroupIndex: number } | null>(null);
+  const [rsaDraft, setRsaDraft] = useState<RsaEditorDraft>(() => createRsaDraft());
+  const [rsaDraftErrors, setRsaDraftErrors] = useState<string[]>([]);
 
   const keywordsForBudget = useMemo(
     () => (state.enhancedKeywords.length > 0 ? state.enhancedKeywords : state.selectedKeywords),
@@ -218,6 +288,45 @@ export function StepCampaign() {
     () => Math.max(...campaignKwCounts, 1),
     [campaignKwCounts]
   );
+  const rsaSummary = useMemo(() => {
+    const previews: Array<{ adGroup: string; headlines: string[] }> = [];
+    let ready = 0;
+
+    for (const campaign of state.campaigns) {
+      for (const adGroup of campaign.adGroups) {
+        if (!adGroup.responsiveSearchAd) continue;
+        ready += 1;
+        if (previews.length < 2) {
+          previews.push({
+            adGroup: adGroup.name,
+            headlines: adGroup.responsiveSearchAd.headlines.slice(0, 3),
+          });
+        }
+      }
+    }
+
+    return { ready, previews };
+  }, [state.campaigns]);
+
+  const rsaRecords = useMemo<AdGroupRsaRecord[]>(() => {
+    const records: AdGroupRsaRecord[] = [];
+
+    state.campaigns.forEach((campaign, campaignIndex) => {
+      campaign.adGroups.forEach((adGroup, adGroupIndex) => {
+        if (!adGroup.responsiveSearchAd) return;
+        records.push({
+          campaignIndex,
+          adGroupIndex,
+          campaignName: campaign.campaignName,
+          adGroupName: adGroup.name,
+          landingPage: campaign.landingPage,
+          rsa: adGroup.responsiveSearchAd,
+        });
+      });
+    });
+
+    return records;
+  }, [state.campaigns]);
 
   // Split ad groups by priority for display
   const adGroupPriorityCounts = useMemo(() => {
@@ -253,13 +362,7 @@ export function StepCampaign() {
       }),
     });
     if (!res.ok) return;
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'google_ads_editor_import.csv';
-    a.click();
-    URL.revokeObjectURL(url);
+    await downloadResponseFile(res, 'google_ads_editor_import.csv');
   }, [state.campaigns, state.targetUrl, state.negativeKeywords]);
 
   const handleExportAnalysis = useCallback(async () => {
@@ -269,14 +372,42 @@ export function StepCampaign() {
       body: JSON.stringify({ campaigns: state.campaigns, defaultUrl: state.targetUrl, format: 'analysis' }),
     });
     if (!res.ok) return;
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'campaign_analysis.csv';
-    a.click();
-    URL.revokeObjectURL(url);
+    await downloadResponseFile(res, 'campaign_analysis.csv');
   }, [state.campaigns, state.targetUrl]);
+
+  const handleExportNegativeLists = useCallback(async () => {
+    const res = await fetch('/api/export-csv', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        campaigns: state.campaigns,
+        defaultUrl: state.targetUrl,
+        format: 'negative-lists',
+        negativeKeywords: state.negativeKeywords,
+        negativeKeywordLists: state.reviewNegativeKeywordLists.length > 0
+          ? state.reviewNegativeKeywordLists
+          : state.negativeKeywordLists,
+      }),
+    });
+    if (!res.ok) return;
+    await downloadResponseFile(res, 'negative_keyword_lists.csv');
+  }, [state.campaigns, state.targetUrl, state.negativeKeywords, state.reviewNegativeKeywordLists, state.negativeKeywordLists]);
+
+  const handleExportNegativeAssignments = useCallback(async () => {
+    const res = await fetch('/api/export-csv', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        campaigns: state.campaigns,
+        defaultUrl: state.targetUrl,
+        format: 'negative-list-assignments',
+        negativeKeywords: state.negativeKeywords,
+        negativeKeywordLists: state.negativeKeywordLists,
+      }),
+    });
+    if (!res.ok) return;
+    await downloadResponseFile(res, 'negative_keyword_assignments.csv');
+  }, [state.campaigns, state.targetUrl, state.negativeKeywords, state.negativeKeywordLists]);
 
   const handleExportDiagnostic = useCallback(async () => {
     const adGroupCount = state.campaigns.reduce((sum, campaign) => sum + campaign.adGroups.length, 0);
@@ -315,6 +446,8 @@ export function StepCampaign() {
       },
       competitorNames: state.competitorNames,
       reviewNegativeKeywords: state.reviewNegativeKeywords,
+      reviewNegativeKeywordLists: state.reviewNegativeKeywordLists,
+      appliedNegativeKeywordLists: state.negativeKeywordLists,
     };
 
     const res = await fetch('/api/export-csv', {
@@ -325,17 +458,14 @@ export function StepCampaign() {
         defaultUrl: state.targetUrl,
         format: 'diagnostic',
         negativeKeywords: state.negativeKeywords,
+        negativeKeywordLists: state.reviewNegativeKeywordLists.length > 0
+          ? state.reviewNegativeKeywordLists
+          : state.negativeKeywordLists,
         settings,
       }),
     });
     if (!res.ok) return;
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'campaign_diagnostic_snapshot.csv';
-    a.click();
-    URL.revokeObjectURL(url);
+    await downloadResponseFile(res, 'campaign_diagnostic_snapshot.csv');
   }, [
     state.businessName,
     state.campaigns,
@@ -348,7 +478,9 @@ export function StepCampaign() {
     state.geoTargets,
     state.languageId,
     state.negativeKeywords,
+    state.negativeKeywordLists,
     state.reviewNegativeKeywords,
+    state.reviewNegativeKeywordLists,
     state.seedKeywords.length,
     state.selectedKeywords.length,
     state.selectedServices,
@@ -369,6 +501,8 @@ export function StepCampaign() {
           campaigns: state.campaigns,
           dailyBudgetMicros: Math.round(parseFloat(dailyBudget) * 1_000_000),
           biddingStrategy: 'MAXIMIZE_CONVERSIONS',
+          negativeKeywords: state.negativeKeywords,
+          defaultFinalUrl: state.targetUrl,
           geoTargetIds: state.geoTargets.length > 0
             ? state.geoTargets.map((target) => target.id)
             : [state.geoTargetId],
@@ -379,15 +513,18 @@ export function StepCampaign() {
         setImportResult({ success: false, message: (data as { error?: string }).error || 'Import failed' });
         return;
       }
-      const data = await res.json() as { created: { campaigns: number; adGroups: number; keywords: number }; errors: string[] };
-      const msg = `Created ${data.created.campaigns} campaigns, ${data.created.adGroups} ad groups, and ${data.created.keywords} keywords.${data.errors.length > 0 ? ` ${data.errors.length} errors occurred.` : ''}`;
+      const data = await res.json() as {
+        created: { campaigns: number; adGroups: number; keywords: number; ads: number };
+        errors: string[];
+      };
+      const msg = `Created ${data.created.campaigns} campaigns, ${data.created.adGroups} ad groups, ${data.created.keywords} keywords, and ${data.created.ads} responsive search ads.${data.errors.length > 0 ? ` ${data.errors.length} errors occurred.` : ''}`;
       setImportResult({ success: true, message: msg });
     } catch (err) {
       setImportResult({ success: false, message: err instanceof Error ? err.message : 'Import failed' });
     } finally {
       setImporting(false);
     }
-  }, [state.campaigns, state.geoTargetId, state.geoTargets, dailyBudget]);
+  }, [state.campaigns, state.geoTargetId, state.geoTargets, state.negativeKeywords, state.targetUrl, dailyBudget]);
 
   const handleStartEditing = useCallback((idx: number) => {
     setEditingCampaignIdx(idx);
@@ -405,12 +542,19 @@ export function StepCampaign() {
       const updatedNegativeKeywords = state.negativeKeywords.map((nk) =>
         nk.campaign === currentName ? { ...nk, campaign: trimmed } : nk
       );
+      const updatedNegativeKeywordLists = state.negativeKeywordLists.map((list) => ({
+        ...list,
+        items: list.items.map((item) =>
+          item.campaign === currentName ? { ...item, campaign: trimmed } : item
+        ),
+      }));
       dispatch({ type: 'SET_CAMPAIGNS', campaigns: updatedCampaigns });
       dispatch({ type: 'SET_NEGATIVE_KEYWORDS', negativeKeywords: updatedNegativeKeywords });
+      dispatch({ type: 'SET_NEGATIVE_KEYWORD_LISTS', lists: updatedNegativeKeywordLists });
     }
     setEditingCampaignIdx(null);
     setEditingName('');
-  }, [editingCampaignIdx, editingName, state.campaigns, state.negativeKeywords, dispatch]);
+  }, [editingCampaignIdx, editingName, state.campaigns, state.negativeKeywords, state.negativeKeywordLists, dispatch]);
 
   const handleEditKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
@@ -421,8 +565,52 @@ export function StepCampaign() {
     }
   }, [handleFinishEditing]);
 
+  const openRsaEditor = useCallback((campaignIndex: number, adGroupIndex: number) => {
+    const rsa = state.campaigns[campaignIndex]?.adGroups[adGroupIndex]?.responsiveSearchAd;
+    setEditingRsaTarget({ campaignIndex, adGroupIndex });
+    setRsaDraft(createRsaDraft(rsa));
+    setRsaDraftErrors([]);
+    setRsaEditorOpen(true);
+  }, [state.campaigns]);
+
+  const saveRsaDraft = useCallback(() => {
+    if (!editingRsaTarget) return;
+
+    const nextErrors = validateRsaDraft(rsaDraft);
+    setRsaDraftErrors(nextErrors);
+    if (nextErrors.length > 0) return;
+
+    const nextRsa: ResponsiveSearchAd = {
+      headlines: rsaDraft.headlines.map((value) => value.trim()).filter(Boolean),
+      descriptions: rsaDraft.descriptions.map((value) => value.trim()).filter(Boolean),
+      path1: rsaDraft.path1.trim() || undefined,
+      path2: rsaDraft.path2.trim() || undefined,
+      source: 'manual',
+      model: state.campaigns[editingRsaTarget.campaignIndex]?.adGroups[editingRsaTarget.adGroupIndex]?.responsiveSearchAd?.model,
+    };
+
+    const updatedCampaigns = state.campaigns.map((campaign, campaignIndex) => {
+      if (campaignIndex !== editingRsaTarget.campaignIndex) return campaign;
+      return {
+        ...campaign,
+        adGroups: campaign.adGroups.map((adGroup, adGroupIndex) => {
+          if (adGroupIndex !== editingRsaTarget.adGroupIndex) return adGroup;
+          return {
+            ...adGroup,
+            responsiveSearchAd: nextRsa,
+          };
+        }),
+      };
+    });
+
+    dispatch({ type: 'SET_CAMPAIGNS', campaigns: updatedCampaigns });
+    setRsaEditorOpen(false);
+    setEditingRsaTarget(null);
+    setRsaDraftErrors([]);
+  }, [dispatch, editingRsaTarget, rsaDraft, state.campaigns]);
+
   return (
-    <div className="space-y-6 max-w-4xl">
+    <div className="space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -537,6 +725,15 @@ export function StepCampaign() {
                   Budget: ${state.strategy.monthlyBudget}/mo &bull; Min vol: {state.strategy.minVolume}
                   {state.strategy.maxCpc ? ` • Max CPC: $${state.strategy.maxCpc}` : ''}
                 </p>
+                <p className="text-muted-foreground">
+                  Competitors: {state.strategy.competitorCampaignMode === 'separate' ? 'Separate campaign' : 'Excluded from standard campaigns'}
+                </p>
+                <p className="text-muted-foreground">
+                  Brand: {state.strategy.brandCampaignMode === 'separate' ? 'Separate brand campaign' : 'No separate brand campaign'}
+                </p>
+                <p className="text-muted-foreground">
+                  Match types: {formatMatchTypeStrategy(state.strategy.matchTypeStrategy)}
+                </p>
               </div>
               <div>
                 <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-0.5">Ad Group Size</p>
@@ -616,6 +813,25 @@ export function StepCampaign() {
                   <p className="text-sm font-semibold tabular-nums">
                     Avg CPC: ${stats.avgCpc.toFixed(2)} <span className="text-xs font-normal text-muted-foreground">across {stats.totalVolumeSum.toLocaleString()} monthly searches</span>
                   </p>
+                </div>
+                <div className="rounded-md bg-muted/50 px-3 py-2.5">
+                  <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-0.5">Ad Copy</p>
+                  <p className="text-sm font-semibold tabular-nums">
+                    {rsaSummary.ready} RSAs ready <span className="text-xs font-normal text-muted-foreground">for {stats.totalAdGroups} ad groups</span>
+                  </p>
+                  <p className="mt-1 text-[10px] text-muted-foreground">
+                    Review and edit each ad group&apos;s RSA below before export or direct import.
+                  </p>
+                  {rsaSummary.previews[0] && (
+                    <div className="mt-2 space-y-1">
+                      {rsaSummary.previews.map((preview) => (
+                        <div key={preview.adGroup}>
+                          <p className="text-[10px] font-medium text-foreground/90 truncate">{preview.adGroup}</p>
+                          <p className="text-[10px] text-muted-foreground truncate">{preview.headlines.join(' • ')}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -920,7 +1136,77 @@ export function StepCampaign() {
         );
       })}
 
-      {/* Negative Keywords (#1) */}
+      {rsaRecords.length > 0 && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm">Responsive Search Ads</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <p className="text-xs text-muted-foreground">
+              Each ad group has one RSA. Any edits you make here are saved into the campaign state and will be used for both CSV export and direct Google Ads import.
+            </p>
+            <div className="space-y-3">
+              {rsaRecords.map((record) => (
+                <div
+                  key={`${record.campaignName}|||${record.adGroupName}`}
+                  className="grid gap-3 rounded-lg border border-border/70 p-3 lg:grid-cols-[220px_minmax(0,1fr)_auto]"
+                >
+                  <div className="min-w-0">
+                    {state.campaigns.length > 1 && (
+                      <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                        {record.campaignName.replace('Service - ', '')}
+                      </p>
+                    )}
+                    <p className="text-sm font-medium">{record.adGroupName}</p>
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      <Badge variant="outline" className="text-[10px]">
+                        {record.rsa.source === 'manual'
+                          ? 'Edited'
+                          : record.rsa.source === 'ai'
+                            ? 'AI'
+                            : 'Fallback'}
+                      </Badge>
+                      {record.rsa.model && (
+                        <Badge variant="secondary" className="text-[10px]">
+                          {record.rsa.model.includes('flash') ? 'Flash' : 'AI Model'}
+                        </Badge>
+                      )}
+                    </div>
+                  </div>
+                  <div className="min-w-0 space-y-1">
+                    <div>
+                      <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Headlines</p>
+                      <p className="text-xs leading-relaxed">{record.rsa.headlines.join(' • ')}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Descriptions</p>
+                      <p className="text-xs leading-relaxed text-muted-foreground">{record.rsa.descriptions.join(' • ')}</p>
+                    </div>
+                    {(record.rsa.path1 || record.rsa.path2) && (
+                      <p className="text-[10px] text-muted-foreground">
+                        Paths: {[record.rsa.path1, record.rsa.path2].filter(Boolean).join(' / ')}
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex items-start justify-end">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8"
+                      onClick={() => openRsaEditor(record.campaignIndex, record.adGroupIndex)}
+                    >
+                      <Pencil className="mr-1.5 h-3.5 w-3.5" />
+                      Edit Copy
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Negative Keywords */}
       {state.negativeKeywords.length > 0 && (
         <Card>
           <CardContent className="p-0">
@@ -930,23 +1216,53 @@ export function StepCampaign() {
               onClick={() => setShowNegatives(!showNegatives)}
             >
               <ChevronRight className={`h-3.5 w-3.5 text-muted-foreground transition-transform ${showNegatives ? 'rotate-90' : ''}`} />
-              <span className="text-xs font-medium">Negative Keywords</span>
+              <span className="text-xs font-medium">Negative Keyword Lists</span>
               <Badge variant="secondary" className="text-[10px] ml-auto">
                 {state.negativeKeywords.length}
               </Badge>
             </button>
             {showNegatives && (
               <div className="border-t px-4 py-2">
-                <div className="max-h-[200px] overflow-y-auto space-y-0.5">
-                  {state.negativeKeywords.map((nk, i) => (
-                    <div key={i} className="flex items-center gap-2 text-xs py-0.5">
-                      <span className="font-mono text-muted-foreground">{nk.keyword}</span>
-                      <span className="text-[10px] text-muted-foreground/60">{nk.matchType}</span>
+                <div className="space-y-3 max-h-[320px] overflow-y-auto pr-1">
+                  {(state.negativeKeywordLists.length > 0
+                    ? state.negativeKeywordLists
+                    : [{
+                      name: 'universal',
+                      label: 'Negative Keywords',
+                      description: 'Flattened campaign-level negatives',
+                      items: state.negativeKeywords,
+                    }]
+                  ).map((list) => (
+                    <div key={list.name} className="rounded-md border border-border/70">
+                      <div className="flex items-center justify-between gap-2 px-3 py-2 bg-muted/20 border-b">
+                        <div>
+                          <p className="text-xs font-medium">{list.label}</p>
+                          {'description' in list && typeof list.description === 'string' && (
+                            <p className="text-[10px] text-muted-foreground mt-0.5">{list.description}</p>
+                          )}
+                        </div>
+                        <Badge variant="outline" className="text-[10px]">
+                          {list.items.length}
+                        </Badge>
+                      </div>
+                      <div className="space-y-1 px-3 py-2">
+                        {list.items.map((item, index) => (
+                          <div key={`${list.name}-${item.keyword}-${index}`} className="flex items-start gap-2 text-xs">
+                            <span className="font-mono text-muted-foreground">{item.keyword}</span>
+                            <span className="text-[10px] text-muted-foreground/70">{item.matchType}</span>
+                            {'campaign' in item && item.campaign && (
+                              <span className="text-[10px] text-muted-foreground/70">
+                                {item.adGroup ? `${item.campaign} / ${item.adGroup}` : item.campaign}
+                              </span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   ))}
                 </div>
                 <p className="text-[10px] text-muted-foreground mt-2">
-                  These keywords are included in the Google Ads Editor CSV export.
+                  These lists feed CSV export and direct Google Ads import. Funnel items are exact-match routing negatives generated from the final structure.
                 </p>
               </div>
             )}
@@ -1003,7 +1319,7 @@ export function StepCampaign() {
                   <div className="min-w-0">
                     <p className="text-sm font-semibold">Import Directly to Google Ads</p>
                     <p className="text-xs text-muted-foreground mt-0.5">
-                      Create campaigns directly in your linked Google Ads account
+                      Create campaigns and negatives directly in your linked Google Ads account
                     </p>
                   </div>
                 </div>
@@ -1023,6 +1339,20 @@ export function StepCampaign() {
               onClick={handleExportAnalysis}
             >
               Download full analysis CSV
+            </button>
+            <button
+              type="button"
+              className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2 transition-colors"
+              onClick={handleExportNegativeLists}
+            >
+              Download negative lists CSV
+            </button>
+            <button
+              type="button"
+              className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2 transition-colors"
+              onClick={handleExportNegativeAssignments}
+            >
+              Download negative assignments CSV
             </button>
             <button
               type="button"
@@ -1071,7 +1401,7 @@ export function StepCampaign() {
             <DialogDescription>
               This will create {state.campaigns.length} campaign{state.campaigns.length !== 1 ? 's' : ''},{' '}
               {stats.totalAdGroups} ad group{stats.totalAdGroups !== 1 ? 's' : ''}, and{' '}
-              {stats.totalKeywords.toLocaleString()} keywords in your Google Ads account.
+              {stats.totalKeywords.toLocaleString()} keywords plus {state.negativeKeywords.length} negative keyword assignment{state.negativeKeywords.length !== 1 ? 's' : ''} in your Google Ads account.
               All campaigns will be created as PAUSED — you will need to enable them in Google Ads.
             </DialogDescription>
           </DialogHeader>
@@ -1121,6 +1451,119 @@ export function StepCampaign() {
                   Import
                 </>
               )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={rsaEditorOpen}
+        onOpenChange={(open) => {
+          setRsaEditorOpen(open);
+          if (!open) {
+            setEditingRsaTarget(null);
+            setRsaDraftErrors([]);
+          }
+        }}
+      >
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Edit Responsive Search Ad</DialogTitle>
+            <DialogDescription>
+              Update headlines, descriptions, and paths for this ad group. Saved changes flow directly into CSV export and Google Ads import.
+            </DialogDescription>
+          </DialogHeader>
+          {editingRsaTarget && (
+            <div className="space-y-4 py-2">
+              <div className="rounded-md border border-border/70 bg-muted/20 px-3 py-2">
+                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Target</p>
+                <p className="text-sm font-medium">
+                  {state.campaigns[editingRsaTarget.campaignIndex]?.campaignName.replace('Service - ', '')}
+                  {' / '}
+                  {state.campaigns[editingRsaTarget.campaignIndex]?.adGroups[editingRsaTarget.adGroupIndex]?.name}
+                </p>
+              </div>
+
+              <div className="grid gap-4 lg:grid-cols-2">
+                <div className="space-y-2">
+                  <Label className="text-xs">Headlines</Label>
+                  {rsaDraft.headlines.map((headline, index) => (
+                    <Input
+                      key={`headline-${index}`}
+                      value={headline}
+                      onChange={(e) => setRsaDraft((prev) => {
+                        const headlines = [...prev.headlines];
+                        headlines[index] = e.target.value;
+                        return { ...prev, headlines };
+                      })}
+                      placeholder={`Headline ${index + 1}`}
+                      className="h-8 text-xs"
+                    />
+                  ))}
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-xs">Descriptions</Label>
+                  {rsaDraft.descriptions.map((description, index) => (
+                    <Textarea
+                      key={`description-${index}`}
+                      value={description}
+                      onChange={(e) => setRsaDraft((prev) => {
+                        const descriptions = [...prev.descriptions];
+                        descriptions[index] = e.target.value;
+                        return { ...prev, descriptions };
+                      })}
+                      placeholder={`Description ${index + 1}`}
+                      className="min-h-[72px] text-xs"
+                    />
+                  ))}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <Label className="text-xs">Path 1</Label>
+                      <Input
+                        value={rsaDraft.path1}
+                        onChange={(e) => setRsaDraft((prev) => ({ ...prev, path1: e.target.value }))}
+                        className="h-8 text-xs"
+                        placeholder="service"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs">Path 2</Label>
+                      <Input
+                        value={rsaDraft.path2}
+                        onChange={(e) => setRsaDraft((prev) => ({ ...prev, path2: e.target.value }))}
+                        className="h-8 text-xs"
+                        placeholder="quote"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {rsaDraftErrors.length > 0 && (
+                <div className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2">
+                  <ul className="space-y-1 text-xs text-destructive">
+                    {rsaDraftErrors.map((errorText) => (
+                      <li key={errorText}>{errorText}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+          <DialogFooter>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setRsaEditorOpen(false);
+                setEditingRsaTarget(null);
+                setRsaDraftErrors([]);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button size="sm" onClick={saveRsaDraft}>
+              Save Ad Copy
             </Button>
           </DialogFooter>
         </DialogContent>

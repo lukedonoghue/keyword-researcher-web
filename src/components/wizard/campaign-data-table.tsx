@@ -146,7 +146,7 @@ const columns: ColumnDef<CampaignKeywordRow>[] = [
     accessorKey: 'campaign',
     header: ({ column }) => <SortableHeader column={column} label="Campaign" />,
     cell: ({ getValue }) => (
-      <span className="truncate max-w-[180px] block" title={getValue<string>()}>
+      <span className="block min-w-[140px] max-w-[220px] truncate" title={getValue<string>()}>
         {getValue<string>().replace('Service - ', '')}
       </span>
     ),
@@ -181,7 +181,7 @@ const columns: ColumnDef<CampaignKeywordRow>[] = [
     accessorKey: 'adGroup',
     header: ({ column }) => <SortableHeader column={column} label="Ad Group" />,
     cell: ({ getValue }) => (
-      <span className="truncate max-w-[180px] block" title={getValue<string>()}>
+      <span className="block min-w-[220px] max-w-[320px] whitespace-normal leading-4" title={getValue<string>()}>
         {getValue<string>()}
       </span>
     ),
@@ -193,7 +193,7 @@ const columns: ColumnDef<CampaignKeywordRow>[] = [
       const kw = row.getValue<string>('keyword');
       const mt = row.original.matchType;
       const formatted = mt === 'Exact' ? `[${kw}]` : mt === 'Phrase' ? `"${kw}"` : kw;
-      return <span className="font-mono">{formatted}</span>;
+      return <span className="block min-w-[260px] font-mono whitespace-normal break-words">{formatted}</span>;
     },
   },
   {
@@ -341,7 +341,10 @@ const columns: ColumnDef<CampaignKeywordRow>[] = [
 ];
 
 const defaultColumnVisibility: Record<string, boolean> = {
+  campaign: false,
   priority: false,
+  adGroupPriority: false,
+  adGroup: false,
   cpcLow: false,
   cpcHigh: false,
   competitionIndex: false,
@@ -391,14 +394,20 @@ export function CampaignDataTable({ campaigns }: { campaigns: CampaignStructureV
 
   // Group rows by campaign > ad group for display
   const groupedData = useMemo(() => {
-    const groups: { campaign: string; priority: string; adGroup: string; rows: CampaignKeywordRow[] }[] = [];
+    const groups: { campaign: string; priority: string; adGroupPriority: string; adGroup: string; rows: CampaignKeywordRow[] }[] = [];
     const keyMap = new Map<string, CampaignKeywordRow[]>();
 
     for (const row of filteredRows) {
       const key = `${row.campaign}|||${row.adGroup}`;
       if (!keyMap.has(key)) {
         keyMap.set(key, []);
-        groups.push({ campaign: row.campaign, priority: row.priority, adGroup: row.adGroup, rows: keyMap.get(key)! });
+        groups.push({
+          campaign: row.campaign,
+          priority: row.priority,
+          adGroupPriority: row.adGroupPriority,
+          adGroup: row.adGroup,
+          rows: keyMap.get(key)!,
+        });
       }
       keyMap.get(key)!.push(row);
     }
@@ -527,6 +536,7 @@ export function CampaignDataTable({ campaigns }: { campaigns: CampaignStructureV
       defaultColumnVisibility={visibilityWithDefaults}
       defaultPageSize={50}
       toolbar={toolbar}
+      hideCampaignLabelInGroups={campaignNames.length === 1}
     />
   );
 }

@@ -149,37 +149,67 @@ export function StepResearch() {
                     Top keywords by volume
                   </p>
                   <div className="rounded-md border border-green-200 dark:border-green-900 overflow-hidden">
-                    <Table>
-                      <TableHeader>
-                        <TableRow className="bg-green-100/50 dark:bg-green-900/30">
-                          <TableHead className="text-[11px] h-7 py-0">Keyword</TableHead>
-                          <TableHead className="text-[11px] h-7 py-0 text-right">Volume</TableHead>
-                          <TableHead className="text-[11px] h-7 py-0 text-right">CPC</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {topKeywords.map((kw) => (
-                          <TableRow key={kw.text} className="bg-white/50 dark:bg-transparent">
-                            <TableCell className="text-xs py-1.5">{kw.text}</TableCell>
-                            <TableCell className="text-xs py-1.5 text-right tabular-nums">{kw.volume.toLocaleString()}</TableCell>
-                            <TableCell className="text-xs py-1.5 text-right tabular-nums">
+                    <div className="md:hidden divide-y divide-green-200 dark:divide-green-900">
+                      {topKeywords.map((kw) => (
+                        <div key={kw.text} className="bg-white/70 dark:bg-transparent px-3 py-2.5 space-y-1.5">
+                          <p className="text-xs font-medium">{kw.text}</p>
+                          <div className="grid grid-cols-2 gap-2 text-[11px]">
+                            <div>
+                              <p className="text-muted-foreground uppercase tracking-wide">Volume</p>
+                              <p className="tabular-nums">{kw.volume.toLocaleString()}</p>
+                            </div>
+                            <div>
+                              <p className="text-muted-foreground uppercase tracking-wide">CPC</p>
                               {kw.cpc > 0 ? (
-                                <>
+                                <p className="tabular-nums">
                                   ${kw.cpc.toFixed(2)}
                                   {(kw.cpcLow || kw.cpcHigh) ? (
-                                    <span className="text-[10px] text-muted-foreground block">
+                                    <span className="block text-[10px] text-muted-foreground">
                                       ${(kw.cpcLow ?? 0).toFixed(2)}–${(kw.cpcHigh ?? 0).toFixed(2)}
                                     </span>
                                   ) : null}
-                                </>
+                                </p>
                               ) : (
-                                <span className="text-[10px] text-muted-foreground italic">Low data</span>
+                                <p className="text-[10px] text-muted-foreground italic">Low data</p>
                               )}
-                            </TableCell>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="hidden md:block">
+                      <Table>
+                        <TableHeader>
+                          <TableRow className="bg-green-100/50 dark:bg-green-900/30">
+                            <TableHead className="text-[11px] h-7 py-0">Keyword</TableHead>
+                            <TableHead className="text-[11px] h-7 py-0 text-right">Volume</TableHead>
+                            <TableHead className="text-[11px] h-7 py-0 text-right">CPC</TableHead>
                           </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
+                        </TableHeader>
+                        <TableBody>
+                          {topKeywords.map((kw) => (
+                            <TableRow key={kw.text} className="bg-white/50 dark:bg-transparent">
+                              <TableCell className="text-xs py-1.5">{kw.text}</TableCell>
+                              <TableCell className="text-xs py-1.5 text-right tabular-nums">{kw.volume.toLocaleString()}</TableCell>
+                              <TableCell className="text-xs py-1.5 text-right tabular-nums">
+                                {kw.cpc > 0 ? (
+                                  <>
+                                    ${kw.cpc.toFixed(2)}
+                                    {(kw.cpcLow || kw.cpcHigh) ? (
+                                      <span className="text-[10px] text-muted-foreground block">
+                                        ${(kw.cpcLow ?? 0).toFixed(2)}–${(kw.cpcHigh ?? 0).toFixed(2)}
+                                      </span>
+                                    ) : null}
+                                  </>
+                                ) : (
+                                  <span className="text-[10px] text-muted-foreground italic">Low data</span>
+                                )}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
                     <div className="px-2 py-1 bg-green-100/30 dark:bg-green-900/20 border-t border-green-200 dark:border-green-900">
                       <p className="text-[10px] text-muted-foreground">
                         CPC = avg of top-of-page bid range from Google Keyword Planner for your selected location. Range shows low (page bottom) to high (page top) estimates.
@@ -249,14 +279,6 @@ export function StepResearch() {
                 </details>
               )}
 
-              <Button
-                variant="brand"
-                size="sm"
-                className="w-full h-9"
-                onClick={() => dispatch({ type: 'SET_STEP', step: 'enhance' })}
-              >
-                Continue to AI Enhancement
-              </Button>
             </CardContent>
           </Card>
         );
@@ -290,7 +312,7 @@ export function StepResearch() {
           <Button
             variant="brand"
             size="sm"
-            className="h-8"
+            className="h-9 flex-1"
             onClick={() => dispatch({ type: 'SET_STEP', step: 'enhance' })}
           >
             Continue to AI Enhancement

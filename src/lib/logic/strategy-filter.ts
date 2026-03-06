@@ -101,6 +101,9 @@ export function buildCampaignStrategyDefaults(): CampaignStrategy {
     focusHighIntent: true,
     includeInformational: false,
     includeNegativeCandidates: false,
+    competitorCampaignMode: 'exclude',
+    brandCampaignMode: 'exclude',
+    matchTypeStrategy: 'exact_phrase',
   };
 }
 
@@ -113,6 +116,9 @@ export function buildCampaignStrategyFromInput(input: {
   focusHighIntent: boolean;
   includeInformational: boolean;
   includeNegativeCandidates: boolean;
+  competitorCampaignMode: CampaignStrategy['competitorCampaignMode'];
+  brandCampaignMode: CampaignStrategy['brandCampaignMode'];
+  matchTypeStrategy: CampaignStrategy['matchTypeStrategy'];
 }): CampaignStrategy {
   const minVolume =
     input.goal === 'conversions' ? Math.max(10, Math.round(input.monthlyBudget * 0.005))
@@ -132,6 +138,9 @@ export function buildCampaignStrategyFromInput(input: {
     focusHighIntent: input.focusHighIntent,
     includeInformational: input.includeInformational,
     includeNegativeCandidates: input.includeNegativeCandidates,
+    competitorCampaignMode: input.competitorCampaignMode,
+    brandCampaignMode: input.brandCampaignMode,
+    matchTypeStrategy: input.matchTypeStrategy,
   };
 }
 

@@ -10,7 +10,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Shield, Target, Zap } from 'lucide-react';
-import type { CampaignStrategy } from '@/lib/types/index';
+import type { CampaignMatchTypeStrategy, CampaignStrategy } from '@/lib/types/index';
 
 const presets: {
   label: string;
@@ -26,7 +26,7 @@ const presets: {
     dailyHint: '~$33/day',
     tone: 'bg-blue-50 border-blue-200 text-blue-700 dark:bg-blue-950/40 dark:border-blue-900 dark:text-blue-300',
     icon: Shield,
-    values: { monthlyBudget: 1000, minVolume: 50, maxCpc: null, focusHighIntent: true, includeInformational: false },
+    values: { monthlyBudget: 1000, minVolume: 50, maxCpc: null, focusHighIntent: true, includeInformational: false, competitorCampaignMode: 'exclude', brandCampaignMode: 'exclude' },
   },
   {
     label: 'Balanced',
@@ -34,7 +34,7 @@ const presets: {
     dailyHint: '~$66/day',
     tone: 'bg-slate-100 border-slate-200 text-slate-700 dark:bg-slate-900/40 dark:border-slate-800 dark:text-slate-300',
     icon: Target,
-    values: { monthlyBudget: 2000, minVolume: 10, maxCpc: null, focusHighIntent: false, includeInformational: false },
+    values: { monthlyBudget: 2000, minVolume: 10, maxCpc: null, focusHighIntent: false, includeInformational: false, competitorCampaignMode: 'exclude', brandCampaignMode: 'exclude' },
   },
   {
     label: 'Aggressive',
@@ -42,9 +42,41 @@ const presets: {
     dailyHint: '~$166/day',
     tone: 'bg-amber-50 border-amber-200 text-amber-700 dark:bg-amber-950/40 dark:border-amber-900 dark:text-amber-300',
     icon: Zap,
-    values: { monthlyBudget: 5000, minVolume: 10, maxCpc: null, focusHighIntent: false, includeInformational: true },
+    values: { monthlyBudget: 5000, minVolume: 10, maxCpc: null, focusHighIntent: false, includeInformational: true, competitorCampaignMode: 'exclude', brandCampaignMode: 'exclude' },
   },
 ];
+
+const matchTypeOptions: Array<{
+  value: CampaignMatchTypeStrategy;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: 'exact_phrase',
+    label: 'Exact + Phrase',
+    description: 'Recommended default. Keeps coverage broad enough to learn while still preserving match-type visibility.',
+  },
+  {
+    value: 'exact_only',
+    label: 'Exact Only',
+    description: 'Tightest control. Best when you want clean intent isolation and minimal query expansion.',
+  },
+  {
+    value: 'phrase_only',
+    label: 'Phrase Only',
+    description: 'Wider reach with simpler account structure, but less precision than Exact-led builds.',
+  },
+];
+
+function getMatchTypeSummary(strategy: CampaignMatchTypeStrategy): string {
+  if (strategy === 'exact_only') {
+    return 'Each keyword will be built once as Exact match only.';
+  }
+  if (strategy === 'phrase_only') {
+    return 'Each keyword will be built once as Phrase match only.';
+  }
+  return 'Each keyword will be built in both Exact and Phrase match by default.';
+}
 
 export function StepStrategy() {
   const { state, dispatch } = useWorkflow();
@@ -74,7 +106,7 @@ export function StepStrategy() {
         </p>
       </div>
 
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         {presets.map((preset) => {
           const Icon = preset.icon;
           const isMatch =
@@ -167,6 +199,116 @@ export function StepStrategy() {
 
       <Card>
         <CardHeader className="pb-3">
+          <CardTitle className="text-sm">Competitor Traffic Handling</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <button
+              type="button"
+              onClick={() => update({ competitorCampaignMode: 'exclude' })}
+              className={`rounded-lg border p-3 text-left transition-colors ${
+                strategy.competitorCampaignMode === 'exclude'
+                  ? 'border-brand-accent bg-brand-accent/5 shadow-sm'
+                  : 'border-border bg-card hover:border-muted-foreground/30'
+              }`}
+            >
+              <p className="text-xs font-medium">Exclude From Standard Campaigns</p>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Recommended. Competitor terms become negatives on normal campaigns.
+              </p>
+            </button>
+            <button
+              type="button"
+              onClick={() => update({ competitorCampaignMode: 'separate' })}
+              className={`rounded-lg border p-3 text-left transition-colors ${
+                strategy.competitorCampaignMode === 'separate'
+                  ? 'border-brand-accent bg-brand-accent/5 shadow-sm'
+                  : 'border-border bg-card hover:border-muted-foreground/30'
+              }`}
+            >
+              <p className="text-xs font-medium">Build Competitor Campaign</p>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Keep competitor negatives on standard campaigns and build a separate competitor-only campaign when data exists.
+              </p>
+            </button>
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            The review step will generate competitor, universal, brand, and routing negative lists based on this choice.
+          </p>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm">Brand Traffic Handling</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <button
+              type="button"
+              onClick={() => update({ brandCampaignMode: 'exclude' })}
+              className={`rounded-lg border p-3 text-left transition-colors ${
+                strategy.brandCampaignMode === 'exclude'
+                  ? 'border-brand-accent bg-brand-accent/5 shadow-sm'
+                  : 'border-border bg-card hover:border-muted-foreground/30'
+              }`}
+            >
+              <p className="text-xs font-medium">No Separate Brand Campaign</p>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Keep the build focused on non-brand service campaigns only.
+              </p>
+            </button>
+            <button
+              type="button"
+              onClick={() => update({ brandCampaignMode: 'separate' })}
+              className={`rounded-lg border p-3 text-left transition-colors ${
+                strategy.brandCampaignMode === 'separate'
+                  ? 'border-brand-accent bg-brand-accent/5 shadow-sm'
+                  : 'border-border bg-card hover:border-muted-foreground/30'
+              }`}
+            >
+              <p className="text-xs font-medium">Build Separate Brand Campaign</p>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Generate a dedicated brand search campaign and apply brand negatives to all non-brand campaigns automatically.
+              </p>
+            </button>
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            When enabled, non-brand keywords are also added as exact-match negatives to the brand campaign to keep routing clean.
+          </p>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm">Match Type Strategy</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {matchTypeOptions.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => update({ matchTypeStrategy: option.value })}
+                className={`rounded-lg border p-3 text-left transition-colors ${
+                  strategy.matchTypeStrategy === option.value
+                    ? 'border-brand-accent bg-brand-accent/5 shadow-sm'
+                    : 'border-border bg-card hover:border-muted-foreground/30'
+                }`}
+              >
+                <p className="text-xs font-medium">{option.label}</p>
+                <p className="mt-1 text-[11px] text-muted-foreground">{option.description}</p>
+              </button>
+            ))}
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            {getMatchTypeSummary(strategy.matchTypeStrategy)}
+          </p>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-3">
           <CardTitle className="text-sm">Ad Group Size</CardTitle>
         </CardHeader>
         <CardContent>
@@ -193,7 +335,7 @@ export function StepStrategy() {
             </div>
           </div>
           <p className="text-[11px] text-muted-foreground mt-2">
-            5–10 keywords per ad group is recommended to start. Each keyword generates both Exact and Phrase match entries.
+            5–10 keywords per ad group is recommended to start. {getMatchTypeSummary(strategy.matchTypeStrategy)}
           </p>
         </CardContent>
       </Card>

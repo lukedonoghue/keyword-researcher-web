@@ -12,6 +12,129 @@ import type { GeoLocationSuggestion, ServiceArea } from '@/lib/types/geo';
 
 type MatchStatus = 'idle' | 'loading' | 'matched' | 'no-match';
 
+const LOCATION_TYPE_PRIORITY = [
+  'City',
+  'State',
+  'Province',
+  'Region',
+  'Municipality',
+  'City Region',
+  'Neighborhood',
+  'Postal Code',
+] as const;
+
+const STATE_ABBREVIATION_ALIASES: Record<string, Record<string, string>> = {
+  AU: {
+    ACT: 'Australian Capital Territory',
+    NSW: 'New South Wales',
+    NT: 'Northern Territory',
+    QLD: 'Queensland',
+    SA: 'South Australia',
+    TAS: 'Tasmania',
+    VIC: 'Victoria',
+    WA: 'Western Australia',
+  },
+  US: {
+    AL: 'Alabama',
+    AK: 'Alaska',
+    AZ: 'Arizona',
+    AR: 'Arkansas',
+    CA: 'California',
+    CO: 'Colorado',
+    CT: 'Connecticut',
+    DE: 'Delaware',
+    FL: 'Florida',
+    GA: 'Georgia',
+    HI: 'Hawaii',
+    ID: 'Idaho',
+    IL: 'Illinois',
+    IN: 'Indiana',
+    IA: 'Iowa',
+    KS: 'Kansas',
+    KY: 'Kentucky',
+    LA: 'Louisiana',
+    ME: 'Maine',
+    MD: 'Maryland',
+    MA: 'Massachusetts',
+    MI: 'Michigan',
+    MN: 'Minnesota',
+    MS: 'Mississippi',
+    MO: 'Missouri',
+    MT: 'Montana',
+    NE: 'Nebraska',
+    NV: 'Nevada',
+    NH: 'New Hampshire',
+    NJ: 'New Jersey',
+    NM: 'New Mexico',
+    NY: 'New York',
+    NC: 'North Carolina',
+    ND: 'North Dakota',
+    OH: 'Ohio',
+    OK: 'Oklahoma',
+    OR: 'Oregon',
+    PA: 'Pennsylvania',
+    RI: 'Rhode Island',
+    SC: 'South Carolina',
+    SD: 'South Dakota',
+    TN: 'Tennessee',
+    TX: 'Texas',
+    UT: 'Utah',
+    VT: 'Vermont',
+    VA: 'Virginia',
+    WA: 'Washington',
+    WV: 'West Virginia',
+    WI: 'Wisconsin',
+    WY: 'Wyoming',
+  },
+};
+
+function normalizeLocationValue(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ');
+}
+
+function buildLocationQueries(name: string, countryCode: string): string[] {
+  const trimmed = name.trim();
+  if (!trimmed) return [];
+  const aliases = STATE_ABBREVIATION_ALIASES[countryCode.toUpperCase()] ?? {};
+  const expanded = aliases[trimmed.toUpperCase()];
+  return expanded && expanded !== trimmed ? [trimmed, expanded] : [trimmed];
+}
+
+function scoreLocationSuggestion(
+  suggestion: GeoLocationSuggestion,
+  query: string,
+  countryCode?: string,
+): number {
+  const normalizedQuery = normalizeLocationValue(query);
+  const normalizedName = normalizeLocationValue(suggestion.name);
+  const normalizedCanonical = normalizeLocationValue(suggestion.canonicalName);
+  const requestedCountry = countryCode?.trim().toUpperCase();
+  const suggestionCountry = suggestion.countryCode.trim().toUpperCase();
+
+  let score = 0;
+
+  if (requestedCountry && suggestionCountry === requestedCountry) {
+    score += 40;
+  }
+
+  if (normalizedName === normalizedQuery) {
+    score += 80;
+  } else if (normalizedCanonical === normalizedQuery) {
+    score += 70;
+  } else if (normalizedCanonical.startsWith(`${normalizedQuery} `) || normalizedCanonical.startsWith(`${normalizedQuery},`)) {
+    score += 60;
+  } else if (normalizedName.startsWith(normalizedQuery)) {
+    score += 50;
+  } else if (normalizedCanonical.includes(normalizedQuery)) {
+    score += 35;
+  }
+
+  const typeIndex = LOCATION_TYPE_PRIORITY.indexOf(suggestion.targetType as (typeof LOCATION_TYPE_PRIORITY)[number]);
+  score += typeIndex === -1 ? 0 : LOCATION_TYPE_PRIORITY.length - typeIndex;
+
+  return score;
+}
+
 type GeoLocationPickerProps = {
   initialCountryCode: string;
   initialLocations: GeoLocationSuggestion[];
@@ -42,7 +165,7 @@ export function GeoLocationPicker({
   const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const resultsRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const autoPopulatedRef = useRef(false);
+  const autoPopulateKeyRef = useRef<string | null>(null);
 
   // Match status tracking for detected cities/states
   const [matchStatuses, setMatchStatuses] = useState<Record<string, MatchStatus>>({});
@@ -55,13 +178,13 @@ export function GeoLocationPicker({
 
   const selectedCountry = useMemo(() => {
     if (manualCountry) return manualCountry;
-    if (initialCountryCode) return initialCountryCode;
     if (detectedCountryCode) {
       const detected = GEO_CONSTANTS.find(
         (geo) => geo.countryCode.toUpperCase() === detectedCountryCode.toUpperCase()
       );
       if (detected) return detected.countryCode;
     }
+    if (initialCountryCode) return initialCountryCode;
     return 'US';
   }, [manualCountry, detectedCountryCode, initialCountryCode]);
 
@@ -91,19 +214,40 @@ export function GeoLocationPicker({
 
   // Reusable helper: search GKP for a location name and return the best match
   const searchAndMatch = useCallback(async (name: string, countryCode: string): Promise<GeoLocationSuggestion | null> => {
-    try {
-      const res = await fetch('/api/google-ads/geo-search', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: name, countryCode }),
-      });
-      if (!res.ok) return null;
-      const data = await res.json() as { locations: GeoLocationSuggestion[] };
-      const locations = Array.isArray(data.locations) ? data.locations : [];
-      return locations.find((l) => l.targetType === 'City') || locations[0] || null;
-    } catch {
-      return null;
+    const queries = buildLocationQueries(name, countryCode);
+
+    for (const query of queries) {
+      const attempts: Array<{ query: string; countryCode?: string }> = [
+        { query, countryCode },
+        { query },
+      ];
+
+      for (const attempt of attempts) {
+        try {
+          const res = await fetch('/api/google-ads/geo-search', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(attempt),
+          });
+          if (!res.ok) continue;
+          const data = await res.json() as { locations: GeoLocationSuggestion[] };
+          const locations = Array.isArray(data.locations) ? data.locations : [];
+          if (locations.length === 0) continue;
+
+          const [bestMatch] = [...locations].sort(
+            (left, right) => scoreLocationSuggestion(right, query, countryCode) - scoreLocationSuggestion(left, query, countryCode),
+          );
+
+          if (bestMatch) {
+            return bestMatch;
+          }
+        } catch {
+          // Try the next fallback attempt.
+        }
+      }
     }
+
+    return null;
   }, []);
 
   // Show an inline message that auto-dismisses
@@ -168,15 +312,22 @@ export function GeoLocationPicker({
 
   // Auto-populate from AI detection with progress tracking
   useEffect(() => {
-    if (autoPopulatedRef.current) return;
-    if (initialLocations.length > 0) {
-      setSelectedLocations(initialLocations);
-      autoPopulatedRef.current = true;
-      return;
-    }
     const cities = detectedServiceArea?.cities ?? [];
     const states = detectedServiceArea?.states ?? [];
     const allNames = [...cities, ...states];
+    const autoPopulateKey = JSON.stringify({
+      selectedCountry,
+      initialLocationIds: initialLocations.map((location) => location.id).sort(),
+      allNames,
+    });
+
+    if (autoPopulateKeyRef.current === autoPopulateKey) return;
+
+    if (initialLocations.length > 0) {
+      setSelectedLocations(initialLocations);
+      autoPopulateKeyRef.current = autoPopulateKey;
+      return;
+    }
     if (allNames.length === 0) return;
 
     let cancelled = false;
@@ -224,7 +375,7 @@ export function GeoLocationPicker({
       }
       setAutoPopulating(false);
       setAutoPopulateSummary({ matched: matchedCount, total: allNames.length });
-      autoPopulatedRef.current = true;
+      autoPopulateKeyRef.current = autoPopulateKey;
     }
 
     void autoSearch();
@@ -270,6 +421,11 @@ export function GeoLocationPicker({
     setSelectedLocations([]);
     setSearchQuery('');
     setSearchResults([]);
+    setShowResults(false);
+    setMatchStatuses({});
+    setMatchResults({});
+    setAutoPopulateSummary(null);
+    autoPopulateKeyRef.current = null;
   };
 
   const targetTypeBadgeVariant = (type: string): 'default' | 'secondary' | 'outline' => {

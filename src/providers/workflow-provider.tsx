@@ -1,7 +1,16 @@
 'use client';
 
 import { createContext, useContext, useReducer, type ReactNode, type Dispatch } from 'react';
-import type { SeedKeyword, SuppressedKeyword, CampaignStrategy, CampaignStructureV2, ServiceContext, NegativeKeyword } from '@/lib/types/index';
+import type {
+  SeedKeyword,
+  SuppressedKeyword,
+  CampaignStrategy,
+  CampaignStructureV2,
+  ServiceContext,
+  NegativeKeyword,
+  NegativeKeywordList,
+  WebsiteMessagingProfile,
+} from '@/lib/types/index';
 import type { ServiceArea, GeoLocationSuggestion } from '@/lib/types/geo';
 
 export type WizardStep =
@@ -32,6 +41,7 @@ export type WorkflowState = {
   businessName: string;
   businessDescription: string;
   businessType: string;
+  messagingProfile: WebsiteMessagingProfile;
   discoveredServices: Array<{ name: string; description: string; seedKeywords: string[]; landingPage?: string }>;
   detectedServiceArea: ServiceArea | null;
   detectedCountryCode: string | null;
@@ -53,7 +63,9 @@ export type WorkflowState = {
   manualSeedKeywords: string[];
   competitorNames: string[];
   reviewNegativeKeywords: string[];
+  reviewNegativeKeywordLists: NegativeKeywordList[];
   negativeKeywords: NegativeKeyword[];
+  negativeKeywordLists: NegativeKeywordList[];
   isProcessing: boolean;
   error: string | null;
 };
@@ -68,6 +80,9 @@ const initialStrategy: CampaignStrategy = {
   focusHighIntent: false,
   includeInformational: false,
   includeNegativeCandidates: false,
+  competitorCampaignMode: 'exclude',
+  brandCampaignMode: 'exclude',
+  matchTypeStrategy: 'exact_phrase',
 };
 
 const initialState: WorkflowState = {
@@ -77,6 +92,15 @@ const initialState: WorkflowState = {
   businessName: '',
   businessDescription: '',
   businessType: '',
+  messagingProfile: {
+    features: [],
+    benefits: [],
+    differentiators: [],
+    offers: [],
+    callsToAction: [],
+    proofPoints: [],
+    tone: '',
+  },
   discoveredServices: [],
   detectedServiceArea: null,
   detectedCountryCode: null,
@@ -98,7 +122,9 @@ const initialState: WorkflowState = {
   manualSeedKeywords: [],
   competitorNames: [],
   reviewNegativeKeywords: [],
+  reviewNegativeKeywordLists: [],
   negativeKeywords: [],
+  negativeKeywordLists: [],
   isProcessing: false,
   error: null,
 };
@@ -113,14 +139,16 @@ function createDownstreamResearchReset() {
     campaigns: [],
     competitorNames: [],
     reviewNegativeKeywords: [],
+    reviewNegativeKeywordLists: [],
     negativeKeywords: [],
+    negativeKeywordLists: [],
   };
 }
 
 export type WorkflowAction =
   | { type: 'SET_STEP'; step: WizardStep }
   | { type: 'SET_TARGET'; url: string; domain: string }
-  | { type: 'SET_DISCOVERY'; businessName: string; businessDescription: string; businessType: string; services: WorkflowState['discoveredServices']; serviceArea: ServiceArea | null; detectedCountryCode: string | null; contextTerms: string[] }
+  | { type: 'SET_DISCOVERY'; businessName: string; businessDescription: string; businessType: string; messagingProfile: WebsiteMessagingProfile; services: WorkflowState['discoveredServices']; serviceArea: ServiceArea | null; detectedCountryCode: string | null; contextTerms: string[] }
   | { type: 'SET_SELECTED_SERVICES'; services: string[]; contexts: ServiceContext[] }
   | { type: 'SET_GEO'; geoTargetId: string; languageId: string; countryCode: string; displayName: string }
   | { type: 'SET_GEO_TARGETS'; targets: GeoLocationSuggestion[]; languageId: string }
@@ -132,7 +160,9 @@ export type WorkflowAction =
   | { type: 'SET_MANUAL_SEEDS'; keywords: string[] }
   | { type: 'SET_COMPETITOR_NAMES'; names: string[] }
   | { type: 'SET_REVIEW_NEGATIVE_KEYWORDS'; keywords: string[] }
+  | { type: 'SET_REVIEW_NEGATIVE_KEYWORD_LISTS'; lists: NegativeKeywordList[] }
   | { type: 'SET_NEGATIVE_KEYWORDS'; negativeKeywords: NegativeKeyword[] }
+  | { type: 'SET_NEGATIVE_KEYWORD_LISTS'; lists: NegativeKeywordList[] }
   | { type: 'SET_PROCESSING'; isProcessing: boolean }
   | { type: 'SET_ERROR'; error: string | null }
   | { type: 'RESET' };
@@ -149,6 +179,7 @@ function workflowReducer(state: WorkflowState, action: WorkflowAction): Workflow
         businessName: '',
         businessDescription: '',
         businessType: '',
+        messagingProfile: initialState.messagingProfile,
         discoveredServices: [],
         detectedServiceArea: null,
         detectedCountryCode: null,
@@ -169,6 +200,7 @@ function workflowReducer(state: WorkflowState, action: WorkflowAction): Workflow
         businessName: action.businessName,
         businessDescription: action.businessDescription,
         businessType: action.businessType,
+        messagingProfile: action.messagingProfile,
         discoveredServices: action.services,
         detectedServiceArea: action.serviceArea,
         detectedCountryCode: action.detectedCountryCode,
@@ -218,7 +250,9 @@ function workflowReducer(state: WorkflowState, action: WorkflowAction): Workflow
         suppressedKeywords: action.suppressed,
         campaigns: [],
         reviewNegativeKeywords: [],
+        reviewNegativeKeywordLists: [],
         negativeKeywords: [],
+        negativeKeywordLists: [],
       };
     case 'SET_ENHANCED_KEYWORDS':
       return {
@@ -227,7 +261,9 @@ function workflowReducer(state: WorkflowState, action: WorkflowAction): Workflow
         enhancedSuppressed: action.suppressed,
         campaigns: [],
         reviewNegativeKeywords: [],
+        reviewNegativeKeywordLists: [],
         negativeKeywords: [],
+        negativeKeywordLists: [],
       };
     case 'SET_CAMPAIGNS':
       return { ...state, campaigns: action.campaigns };
@@ -236,9 +272,25 @@ function workflowReducer(state: WorkflowState, action: WorkflowAction): Workflow
     case 'SET_COMPETITOR_NAMES':
       return { ...state, competitorNames: action.names };
     case 'SET_REVIEW_NEGATIVE_KEYWORDS':
-      return { ...state, reviewNegativeKeywords: action.keywords, campaigns: [], negativeKeywords: [] };
+      return {
+        ...state,
+        reviewNegativeKeywords: action.keywords,
+        campaigns: [],
+        negativeKeywords: [],
+        negativeKeywordLists: [],
+      };
+    case 'SET_REVIEW_NEGATIVE_KEYWORD_LISTS':
+      return {
+        ...state,
+        reviewNegativeKeywordLists: action.lists,
+        campaigns: [],
+        negativeKeywords: [],
+        negativeKeywordLists: [],
+      };
     case 'SET_NEGATIVE_KEYWORDS':
       return { ...state, negativeKeywords: action.negativeKeywords };
+    case 'SET_NEGATIVE_KEYWORD_LISTS':
+      return { ...state, negativeKeywordLists: action.lists };
     case 'SET_PROCESSING':
       return { ...state, isProcessing: action.isProcessing };
     case 'SET_ERROR':

@@ -1,5 +1,10 @@
 import axios from 'axios';
 
+const DEFAULT_OPENROUTER_MODEL =
+  process.env.OPENROUTER_MODEL?.trim() ||
+  process.env.OPENROUTER_ENHANCE_MODEL?.trim() ||
+  'google/gemini-3-flash-preview';
+
 export type ChatMessage = {
   role: 'system' | 'user' | 'assistant';
   content: string;
@@ -17,7 +22,7 @@ export class OpenRouterService {
   private model: string;
   private timeoutMs: number;
 
-  constructor(apiKey: string, model: string = 'google/gemini-2.0-flash-001') {
+  constructor(apiKey: string, model: string = DEFAULT_OPENROUTER_MODEL) {
     this.apiKey = apiKey;
     this.model = model;
     this.baseUrl = 'https://openrouter.ai/api/v1';

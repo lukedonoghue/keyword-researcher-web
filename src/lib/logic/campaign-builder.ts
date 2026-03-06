@@ -1,4 +1,11 @@
-import type { CampaignStructureV2, AdGroup, AdGroupPriority, SubTheme, SubThemeKeyword } from '../types/index';
+import type {
+  CampaignStructureV2,
+  AdGroup,
+  AdGroupPriority,
+  CampaignMatchTypeStrategy,
+  SubTheme,
+  SubThemeKeyword,
+} from '../types/index';
 import { normalizeKeywordText } from './keyword-signals';
 
 interface KeywordMetric {
@@ -42,6 +49,7 @@ export interface CampaignBuildOptions {
   minAdGroupKeywords?: number;
   maxAdGroupKeywords?: number;
   targetDomain?: string;
+  matchTypeStrategy?: CampaignMatchTypeStrategy;
 }
 
 type AdGroupLimits = {
@@ -92,6 +100,7 @@ function hasNegativeSignal(text: string, competitorNames: string[] = []): boolea
 export class CampaignBuilder {
   private static readonly DEFAULT_MIN_AD_GROUP_KEYWORDS = 3;
   private static readonly DEFAULT_MAX_AD_GROUP_KEYWORDS = 10;
+  private static readonly DEFAULT_MATCH_TYPE_STRATEGY: CampaignMatchTypeStrategy = 'exact_phrase';
 
   static build(
     services: ServiceInput[],
@@ -125,7 +134,12 @@ export class CampaignBuilder {
 
     for (const profile of serviceProfiles) {
       const campaignKeywords = keywordsByService.get(profile.name) || [];
-      const adGroups = this.buildAdGroupsV2(profile, campaignKeywords, limits);
+      const adGroups = this.buildAdGroupsV2(
+        profile,
+        campaignKeywords,
+        limits,
+        options.matchTypeStrategy ?? this.DEFAULT_MATCH_TYPE_STRATEGY,
+      );
       if (adGroups.length === 0) continue;
 
       // A8: Landing page fallback — construct if missing or duplicate
@@ -153,10 +167,20 @@ export class CampaignBuilder {
       const primaryProfile = serviceProfiles[0];
       const existingKws = this.extractKeywordsFromAdGroups(primary.adGroups);
       const combined = this.dedupeKeywords([...existingKws, ...unmatchedKeywords]);
-      primary.adGroups = this.buildAdGroupsV2(primaryProfile, combined, limits);
+      primary.adGroups = this.buildAdGroupsV2(
+        primaryProfile,
+        combined,
+        limits,
+        options.matchTypeStrategy ?? this.DEFAULT_MATCH_TYPE_STRATEGY,
+      );
     } else if (unmatchedKeywords.length > 0 && campaigns.length === 0) {
       const [fallbackProfile] = serviceProfiles;
-      const adGroups = this.buildAdGroupsV2(fallbackProfile, unmatchedKeywords, limits);
+      const adGroups = this.buildAdGroupsV2(
+        fallbackProfile,
+        unmatchedKeywords,
+        limits,
+        options.matchTypeStrategy ?? this.DEFAULT_MATCH_TYPE_STRATEGY,
+      );
       if (adGroups.length > 0) {
         campaigns.push({
           campaignName: `Service - ${fallbackProfile.name}`,
@@ -264,14 +288,21 @@ export class CampaignBuilder {
     serviceProfile: ServiceProfile,
     campaignKeywords: KeywordMetric[],
     limits: AdGroupLimits,
+    matchTypeStrategy: CampaignMatchTypeStrategy,
   ): AdGroup[] {
     const sorted = this.sortKeywords([...campaignKeywords]);
     if (sorted.length === 0) return [];
+    const existingNames = new Set<string>();
 
     // For very small keyword sets, single group
     if (sorted.length <= limits.min * 2) {
-      const subThemes = this.buildSubThemesForGroup(sorted);
-      return this.assignAdGroupPriority([{ name: serviceProfile.name, subThemes }]);
+      const subThemes = this.buildSubThemesForGroup(sorted, matchTypeStrategy);
+      return this.assignAdGroupPriority([
+        {
+          name: this.getUniqueAdGroupName(existingNames, 'General'),
+          subThemes,
+        },
+      ]);
     }
 
     // Step 1: Split by intent tier
@@ -287,7 +318,6 @@ export class CampaignBuilder {
     }
 
     const adGroups: AdGroup[] = [];
-    const serviceName = serviceProfile.name;
 
     // Step 2: Build ad groups for each tier, sub-splitting by theme if over limit
     for (const [tier, tierKeywords] of [['Action', actionKeywords], ['Research', researchKeywords]] as const) {
@@ -295,8 +325,15 @@ export class CampaignBuilder {
 
       if (tierKeywords.length <= limits.max) {
         // Fits in one group
-        const subThemes = this.buildSubThemesForGroup(tierKeywords);
-        adGroups.push({ name: `${serviceName} - ${tier}`, subThemes });
+        const subThemes = this.buildSubThemesForGroup(tierKeywords, matchTypeStrategy);
+        adGroups.push({
+          name: this.getAdGroupName(
+            existingNames,
+            tier,
+            this.pickAdGroupTheme(tierKeywords, serviceProfile, tier),
+          ),
+          subThemes,
+        });
       } else {
         // Sub-split by modifier theme
         const themeBuckets = this.groupKeywordsByTheme(tierKeywords, serviceProfile);
@@ -319,38 +356,130 @@ export class CampaignBuilder {
               overflow.push(...chunk);
               continue;
             }
-            const suffix = chunks.length > 1 ? ` (${index + 1})` : '';
-            const themeName = theme === 'General' ? '' : `: ${this.toTitleCase(theme)}`;
-            const groupName = `${serviceName} - ${tier}${themeName}${suffix}`;
-            const subThemes = this.buildSubThemesForGroup(chunk);
-            adGroups.push({ name: groupName, subThemes });
+            const subThemes = this.buildSubThemesForGroup(chunk, matchTypeStrategy);
+            adGroups.push({
+              name: this.getAdGroupName(
+                existingNames,
+                tier,
+                theme,
+                chunks.length > 1 ? index + 1 : undefined,
+              ),
+              subThemes,
+            });
           }
         }
 
         // Handle overflow within this tier
         if (overflow.length > 0) {
           const tierGroups = adGroups.filter((ag) => ag.name.includes(`- ${tier}`));
-          if (tierGroups.length > 0 && overflow.length < limits.min) {
-            this.distributeKeywordsRoundRobin(overflow, tierGroups, limits);
-          } else if (overflow.length >= limits.min) {
-            const chunks = this.chunkKeywordsIntoGroups(overflow, limits);
-            for (const [idx, chunk] of chunks.entries()) {
-              const suffix = chunks.length > 1 ? ` (${idx + 1})` : '';
-              const subThemes = this.buildSubThemesForGroup(chunk);
-              adGroups.push({ name: `${serviceName} - ${tier}: General${suffix}`, subThemes });
-            }
-          } else {
-            // Too few and no tier groups exist — create a single group
-            const subThemes = this.buildSubThemesForGroup(overflow);
-            adGroups.push({ name: `${serviceName} - ${tier}`, subThemes });
+        if (tierGroups.length > 0 && overflow.length < limits.min) {
+          this.distributeKeywordsRoundRobin(overflow, tierGroups, limits, matchTypeStrategy);
+        } else if (overflow.length >= limits.min) {
+          const chunks = this.chunkKeywordsIntoGroups(overflow, limits);
+          for (const [idx, chunk] of chunks.entries()) {
+            const subThemes = this.buildSubThemesForGroup(chunk, matchTypeStrategy);
+            adGroups.push({
+              name: this.getAdGroupName(
+                existingNames,
+                tier,
+                'General',
+                chunks.length > 1 ? idx + 1 : undefined,
+              ),
+              subThemes,
+            });
           }
+        } else {
+          // Too few and no tier groups exist — create a single group
+          const subThemes = this.buildSubThemesForGroup(overflow, matchTypeStrategy);
+          adGroups.push({
+            name: this.getAdGroupName(existingNames, tier, 'General'),
+            subThemes,
+          });
         }
       }
+    }
     }
 
     // Ensure no empty ad groups, then assign priorities
     const nonEmpty = adGroups.filter((ag) => ag.subThemes.some((st) => st.keywords.length > 0));
     return this.assignAdGroupPriority(nonEmpty);
+  }
+
+  private static getAdGroupName(
+    existingNames: Set<string>,
+    tier: 'Action' | 'Research',
+    theme: string,
+    chunkNumber?: number,
+  ): string {
+    const normalizedTheme = theme.trim() || 'General';
+    const titleTheme = this.toTitleCase(normalizedTheme);
+
+    let baseName =
+      normalizedTheme.toLowerCase() === 'general'
+        ? (tier === 'Action' ? 'General' : 'Research')
+        : titleTheme;
+
+    if (
+      tier === 'Research' &&
+      !/\b(research|comparison|diy|guide|information|info|navigation|brand)\b/i.test(baseName)
+    ) {
+      baseName = `${baseName} Research`;
+    }
+
+    const withChunk = chunkNumber ? `${baseName} (${chunkNumber})` : baseName;
+    return this.getUniqueAdGroupName(existingNames, withChunk, tier);
+  }
+
+  private static pickAdGroupTheme(
+    keywords: KeywordMetric[],
+    serviceProfile: ServiceProfile,
+    tier: 'Action' | 'Research',
+  ): string {
+    const themeBuckets = this.groupKeywordsByTheme(keywords, serviceProfile);
+    if (themeBuckets.size === 0) {
+      return tier === 'Action' ? 'General' : 'Research';
+    }
+
+    const sortedThemes = Array.from(themeBuckets.entries())
+      .sort((a, b) => b[1].length - a[1].length);
+    const [dominantTheme, dominantKeywords] = sortedThemes[0] ?? ['General', []];
+    if (!dominantTheme || dominantKeywords.length === 0) {
+      return tier === 'Action' ? 'General' : 'Research';
+    }
+
+    if (themeBuckets.size === 1) {
+      return dominantTheme;
+    }
+
+    if (dominantTheme !== 'General' && dominantKeywords.length >= Math.ceil(keywords.length * 0.6)) {
+      return dominantTheme;
+    }
+
+    return tier === 'Action' ? 'General' : 'Research';
+  }
+
+  private static getUniqueAdGroupName(
+    existingNames: Set<string>,
+    baseName: string,
+    tier?: 'Action' | 'Research',
+  ): string {
+    let candidate = baseName.trim();
+    let key = candidate.toLowerCase();
+
+    if (existingNames.has(key) && tier) {
+      candidate = `${tier} - ${candidate}`;
+      key = candidate.toLowerCase();
+    }
+
+    let suffix = 2;
+    let unique = candidate;
+    while (existingNames.has(unique.toLowerCase())) {
+      unique = `${candidate} (${suffix})`;
+      suffix += 1;
+    }
+
+    existingNames.add(unique.toLowerCase());
+    return unique;
   }
 
   static assignAdGroupPriority(adGroups: AdGroup[]): AdGroup[] {
@@ -435,9 +564,39 @@ export class CampaignBuilder {
     return adGroups;
   }
 
-  private static buildSubThemesForGroup(keywords: KeywordMetric[]): SubTheme[] {
-    // Sub-cluster by match type: Exact vs Phrase
-    const matchTypes: ('Exact' | 'Phrase')[] = ['Exact', 'Phrase'];
+  private static resolveMatchTypes(
+    strategy: CampaignMatchTypeStrategy,
+  ): Array<'Exact' | 'Phrase'> {
+    if (strategy === 'exact_only') return ['Exact'];
+    if (strategy === 'phrase_only') return ['Phrase'];
+    return ['Exact', 'Phrase'];
+  }
+
+  private static buildKeywordRowsForMatchTypes(
+    keywords: KeywordMetric[],
+    matchTypes: Array<'Exact' | 'Phrase'>,
+  ): SubThemeKeyword[] {
+    return keywords.flatMap((kw) =>
+      matchTypes.map((matchType) => ({
+        keyword: kw.text,
+        matchType,
+        volume: kw.volume,
+        cpc: kw.cpc,
+        cpcLow: kw.cpcLow,
+        cpcHigh: kw.cpcHigh,
+        competitionIndex: kw.competitionIndex,
+        qualityScore: kw.qualityScore,
+        qualityRating: kw.qualityRating,
+        intent: kw.intent,
+      }))
+    );
+  }
+
+  private static buildSubThemesForGroup(
+    keywords: KeywordMetric[],
+    matchTypeStrategy: CampaignMatchTypeStrategy,
+  ): SubTheme[] {
+    const matchTypes = this.resolveMatchTypes(matchTypeStrategy);
     const subThemes: SubTheme[] = [];
 
     // Also try semantic sub-clustering if there are enough keywords
@@ -464,20 +623,7 @@ export class CampaignBuilder {
 
         for (const [intent, kws] of intentGroups.entries()) {
           const label = intentLabels[intent] || this.toTitleCase(intent);
-          const kwRows: SubThemeKeyword[] = kws.flatMap((kw) =>
-            matchTypes.map((mt) => ({
-              keyword: kw.text,
-              matchType: mt,
-              volume: kw.volume,
-              cpc: kw.cpc,
-              cpcLow: kw.cpcLow,
-              cpcHigh: kw.cpcHigh,
-              competitionIndex: kw.competitionIndex,
-              qualityScore: kw.qualityScore,
-              qualityRating: kw.qualityRating,
-              intent: kw.intent,
-            }))
-          );
+          const kwRows = this.buildKeywordRowsForMatchTypes(kws, matchTypes);
           subThemes.push({ name: label, keywords: kwRows });
         }
         return subThemes;
@@ -485,20 +631,7 @@ export class CampaignBuilder {
     }
 
     // Default: single sub-theme with all keywords in both match types
-    const allRows: SubThemeKeyword[] = keywords.flatMap((kw) =>
-      matchTypes.map((mt) => ({
-        keyword: kw.text,
-        matchType: mt,
-        volume: kw.volume,
-        cpc: kw.cpc,
-        cpcLow: kw.cpcLow,
-        cpcHigh: kw.cpcHigh,
-        competitionIndex: kw.competitionIndex,
-        qualityScore: kw.qualityScore,
-        qualityRating: kw.qualityRating,
-        intent: kw.intent,
-      }))
-    );
+    const allRows = this.buildKeywordRowsForMatchTypes(keywords, matchTypes);
     subThemes.push({ name: 'Core Keywords', keywords: allRows });
     return subThemes;
   }
@@ -581,6 +714,7 @@ export class CampaignBuilder {
     keywords: KeywordMetric[],
     adGroups: AdGroup[],
     limits: AdGroupLimits,
+    matchTypeStrategy: CampaignMatchTypeStrategy,
   ): void {
     if (keywords.length === 0 || adGroups.length === 0) return;
     let groupIdx = 0;
@@ -590,7 +724,7 @@ export class CampaignBuilder {
       for (let attempt = 0; attempt < adGroups.length; attempt++) {
         const candidate = adGroups[(groupIdx + attempt) % adGroups.length]!;
         if (this.countUniqueKeywords(candidate) < limits.max) {
-          const subThemes = this.buildSubThemesForGroup([kw]);
+          const subThemes = this.buildSubThemesForGroup([kw], matchTypeStrategy);
           candidate.subThemes.push(...subThemes);
           groupIdx = (groupIdx + attempt + 1) % adGroups.length;
           placed = true;

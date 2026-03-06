@@ -19,8 +19,8 @@ export function getKeywordQualityScore(keyword: SeedKeyword): { score: number; r
   const intent = keyword.intent ?? 'unknown';
   const intentFactor = intentScoreByIntent[intent] ?? 0.35;
 
-  // Weights: Volume 40%, CPC efficiency 25%, Competition opportunity 15%, Rank 5%, Intent 15%
-  const score = Math.round(volumeFactor * 40 + cpcFactor * 25 + competitionFactor * 15 + rankFactor * 5 + intentFactor * 15);
+  // Weights: Intent 35%, CPC efficiency 30%, Volume 20%, Competition opportunity 10%, Rank 5%
+  const score = Math.round(intentFactor * 35 + cpcFactor * 30 + volumeFactor * 20 + competitionFactor * 10 + rankFactor * 5);
 
   let rating = 'D';
   if (score >= 86) rating = 'A+';

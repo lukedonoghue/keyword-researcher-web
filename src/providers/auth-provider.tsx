@@ -15,9 +15,13 @@ type AuthContextType = AuthState & {
   selectAccount: (customerId: string) => Promise<void>;
   openrouterApiKey: string;
   setOpenrouterApiKey: (key: string) => void;
+  openrouterModel: string;
+  setOpenrouterModel: (model: string) => void;
 };
 
 const AuthContext = createContext<AuthContextType | null>(null);
+
+const DEFAULT_OPENROUTER_MODEL = 'google/gemini-3-flash-preview';
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AuthState>({
@@ -29,6 +33,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [openrouterApiKey, setOpenrouterApiKeyState] = useState(() => {
     if (typeof window === 'undefined') return '';
     return localStorage.getItem('openrouter_api_key') || '';
+  });
+  const [openrouterModel, setOpenrouterModelState] = useState(() => {
+    if (typeof window === 'undefined') return DEFAULT_OPENROUTER_MODEL;
+    return localStorage.getItem('openrouter_model') || DEFAULT_OPENROUTER_MODEL;
   });
 
   const checkAuth = useCallback(async () => {
@@ -69,6 +77,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const setOpenrouterModel = useCallback((model: string) => {
+    setOpenrouterModelState(model);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('openrouter_model', model);
+    }
+  }, []);
+
   useEffect(() => {
     const timer = setTimeout(() => {
       void checkAuth();
@@ -78,7 +93,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{ ...state, checkAuth, logout, selectAccount, openrouterApiKey, setOpenrouterApiKey }}
+      value={{
+        ...state,
+        checkAuth,
+        logout,
+        selectAccount,
+        openrouterApiKey,
+        setOpenrouterApiKey,
+        openrouterModel,
+        setOpenrouterModel,
+      }}
     >
       {children}
     </AuthContext.Provider>

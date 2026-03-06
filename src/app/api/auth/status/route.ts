@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { ensureDevSession, getSession } from '@/lib/auth/session';
 
 export async function GET() {
-  const session = await getSession();
+  const session = await ensureDevSession(await getSession());
 
   return NextResponse.json({
     authenticated: Boolean(session.refreshToken),

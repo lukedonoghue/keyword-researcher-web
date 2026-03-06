@@ -3,12 +3,22 @@
 import { useCallback } from 'react';
 import { useWorkflow, type WizardStep } from '@/providers/workflow-provider';
 import { useAuth } from '@/providers/auth-provider';
-import type { SeedKeyword, SuppressedKeyword } from '@/lib/types/index';
+import type {
+  CampaignStrategy,
+  NegativeKeywordList,
+  NegativeKeywordListName,
+  NegativeKeywordSource,
+  SeedKeyword,
+  SuppressedKeyword,
+  WebsiteMessagingProfile,
+} from '@/lib/types/index';
 import type { CampaignStructureV2 } from '@/lib/types/index';
 import type { ServiceArea, GeoLocationSuggestion } from '@/lib/types/geo';
 import { getErrorMessage } from '@/lib/utils';
+import { downloadResponseFile } from '@/lib/utils';
 import { mergeKeywordsWithGoogleAdsAuthority } from '@/lib/logic/keyword-merge';
 import { enrichSeedKeywordsWithSignals, applyStrategyFilter } from '@/lib/logic/strategy-filter';
+import { buildReviewNegativeKeywordLists, mergeReviewNegativeKeywordLists } from '@/lib/logic/negative-keywords';
 
 type ErrorResponse = { error?: string };
 
@@ -22,6 +32,7 @@ type DiscoverServicesResponse = {
   businessName: string;
   businessDescription: string;
   businessType?: string;
+  messagingProfile?: WebsiteMessagingProfile;
   services?: Array<{ name: string; description: string; seedKeywords: string[]; landingPage?: string }>;
   serviceArea?: ServiceArea | null;
   detectedCountryCode?: string | null;
@@ -89,16 +100,29 @@ type EnhanceMergeResponse = {
   suppressed: SuppressedKeyword[];
 };
 
+type EnhanceNegativesResponse = {
+  items?: NegativeKeywordList['items'];
+  stats?: {
+    model?: string;
+    totalTokens?: number;
+  };
+};
+
 type NegativeKeywordApi = {
   campaign: string;
+  adGroup: string;
   keyword: string;
   matchType: 'Phrase' | 'Exact';
   status: 'Negative';
+  listName?: NegativeKeywordListName;
+  source?: NegativeKeywordSource;
+  reason?: string;
 };
 
 type BuildCampaignResponse = {
   campaigns: CampaignStructureV2[];
   negativeKeywords: NegativeKeywordApi[];
+  negativeKeywordLists: NegativeKeywordList[];
 };
 
 async function getApiErrorMessage(response: Response, fallback: string): Promise<string> {
@@ -115,7 +139,7 @@ async function getApiErrorMessage(response: Response, fallback: string): Promise
 
 export function useWorkflowData() {
   const { state, dispatch } = useWorkflow();
-  const { openrouterApiKey } = useAuth();
+  const { openrouterApiKey, openrouterModel } = useAuth();
 
   const goToStep = useCallback((step: WizardStep) => {
     dispatch({ type: 'SET_STEP', step });
@@ -139,6 +163,15 @@ export function useWorkflowData() {
         businessName: data.businessName,
         businessDescription: data.businessDescription,
         businessType: data.businessType || '',
+        messagingProfile: data.messagingProfile ?? {
+          features: [],
+          benefits: [],
+          differentiators: [],
+          offers: [],
+          callsToAction: [],
+          proofPoints: [],
+          tone: '',
+        },
         services: Array.isArray(data.services) ? data.services : [],
         serviceArea: data.serviceArea || null,
         detectedCountryCode: data.detectedCountryCode || null,
@@ -325,6 +358,7 @@ export function useWorkflowData() {
           services: state.selectedServices,
           targetDomain: state.targetDomain,
           openrouterApiKey,
+          openrouterModel,
           ...extra,
         };
         const res = await fetch('/api/enhance', {
@@ -365,6 +399,48 @@ export function useWorkflowData() {
       const mergeData = await mergeRes.json() as EnhanceMergeResponse;
 
       dispatch({ type: 'SET_ENHANCED_KEYWORDS', keywords: mergeData.keywords, suppressed: mergeData.suppressed });
+
+      const generatedReviewLists = buildReviewNegativeKeywordLists({
+        suppressedKeywords: mergeData.suppressed,
+        competitorNames: state.competitorNames,
+        businessName: state.businessName,
+        targetDomain: state.targetDomain,
+        enableBrandList: state.strategy.brandCampaignMode === 'separate',
+      });
+
+      let reviewLists = generatedReviewLists;
+      if (openrouterApiKey && mergeData.suppressed.length > 0) {
+        try {
+          const negativesRes = await fetch('/api/enhance', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              phase: 'negatives',
+              keywords: mergeData.suppressed,
+              services: state.selectedServices,
+              targetDomain: state.targetDomain,
+              businessName: state.businessName,
+              businessDescription: state.businessDescription,
+              openrouterApiKey,
+              openrouterModel,
+            }),
+          });
+
+          if (negativesRes.ok) {
+            const negativesData = await negativesRes.json() as EnhanceNegativesResponse;
+            const universalList = generatedReviewLists.find((list) => list.name === 'universal');
+            if (universalList && Array.isArray(negativesData.items) && negativesData.items.length > 0) {
+              reviewLists = mergeReviewNegativeKeywordLists(generatedReviewLists, [
+                { ...universalList, items: negativesData.items },
+              ]);
+            }
+          }
+        } catch (error) {
+          console.warn('[enhance] AI negative review failed:', error);
+        }
+      }
+
+      dispatch({ type: 'SET_REVIEW_NEGATIVE_KEYWORD_LISTS', lists: reviewLists });
       return mergeData;
     } catch (err: unknown) {
       dispatch({ type: 'SET_ERROR', error: getErrorMessage(err, 'Failed to enhance keywords') });
@@ -372,7 +448,7 @@ export function useWorkflowData() {
     } finally {
       dispatch({ type: 'SET_PROCESSING', isProcessing: false });
     }
-  }, [dispatch, state, openrouterApiKey]);
+  }, [dispatch, state, openrouterApiKey, openrouterModel]);
 
   const buildCampaign = useCallback(async (keywords: SeedKeyword[], overrides?: { allSeedKeywords?: SeedKeyword[]; competitorNames?: string[] }) => {
     dispatch({ type: 'SET_PROCESSING', isProcessing: true });
@@ -406,13 +482,25 @@ export function useWorkflowData() {
           services,
           keywords: keywordMetrics,
           allKeywords: allKeywordMetrics,
+          businessName: state.businessName,
+          businessDescription: state.businessDescription,
+          messagingProfile: state.messagingProfile,
+          contextTerms: state.contextTerms,
           competitorNames: overrides?.competitorNames ?? state.competitorNames,
+          suppressedKeywords: (state.enhancedSuppressed.length > 0 ? state.enhancedSuppressed : state.suppressedKeywords).map((kw) => ({
+            ...kw,
+            suppressionReasons: kw.suppressionReasons,
+          })),
+          reviewNegativeKeywordLists: state.reviewNegativeKeywordLists,
+          strategy: state.strategy as CampaignStrategy,
           options: {
             minAdGroupKeywords: state.strategy.minAdGroupKeywords,
             maxAdGroupKeywords: state.strategy.maxAdGroupKeywords,
           },
           manualNegativeKeywords: state.reviewNegativeKeywords,
           targetDomain: state.targetDomain,
+          openrouterApiKey,
+          openrouterModel,
         }),
       });
       if (!res.ok) {
@@ -423,6 +511,9 @@ export function useWorkflowData() {
       if (Array.isArray(data.negativeKeywords)) {
         dispatch({ type: 'SET_NEGATIVE_KEYWORDS', negativeKeywords: data.negativeKeywords });
       }
+      if (Array.isArray(data.negativeKeywordLists)) {
+        dispatch({ type: 'SET_NEGATIVE_KEYWORD_LISTS', lists: data.negativeKeywordLists });
+      }
       return data.campaigns;
     } catch (err: unknown) {
       dispatch({ type: 'SET_ERROR', error: getErrorMessage(err, 'Failed to build campaign') });
@@ -430,7 +521,7 @@ export function useWorkflowData() {
     } finally {
       dispatch({ type: 'SET_PROCESSING', isProcessing: false });
     }
-  }, [dispatch, state]);
+  }, [dispatch, openrouterApiKey, openrouterModel, state]);
 
   const exportCsv = useCallback(async () => {
     const res = await fetch('/api/export-csv', {
@@ -443,13 +534,7 @@ export function useWorkflowData() {
       }),
     });
     if (!res.ok) throw new Error('Failed to export CSV');
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'campaign_structure.csv';
-    a.click();
-    URL.revokeObjectURL(url);
+    await downloadResponseFile(res, 'campaign_structure.csv');
   }, [state.campaigns, state.targetUrl, state.negativeKeywords]);
 
   type RerunPhase = 'competitors' | 'google' | 'merging' | 'filtering' | 'enhancing' | 'building';

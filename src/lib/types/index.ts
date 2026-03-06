@@ -31,17 +31,70 @@ export type SuppressedKeyword = SeedKeyword & {
   suppressionReasons: string[];
 };
 
+export type NegativeKeywordListName = 'competitor' | 'universal' | 'brand' | 'funnel';
+export type NegativeKeywordListScope = 'campaign' | 'ad_group' | 'mixed';
+export type NegativeKeywordSource =
+  | 'baseline'
+  | 'ai_review'
+  | 'competitor_research'
+  | 'brand_identity'
+  | 'suppressed_keyword'
+  | 'ngram'
+  | 'routing'
+  | 'cross_campaign'
+  | 'manual_review';
+
+export type NegativeKeywordListItem = {
+  keyword: string;
+  matchType: 'Phrase' | 'Exact';
+  enabled: boolean;
+  reasons: string[];
+  source: NegativeKeywordSource;
+  variants?: string[];
+  campaign?: string;
+  adGroup?: string;
+  occurrences?: number;
+};
+
+export type NegativeKeywordList = {
+  name: NegativeKeywordListName;
+  label: string;
+  description: string;
+  scope: NegativeKeywordListScope;
+  defaultMatchType: 'Phrase' | 'Exact';
+  items: NegativeKeywordListItem[];
+};
+
 export type NegativeKeyword = {
   campaign: string;
+  adGroup: string;
   keyword: string;
   matchType: 'Phrase' | 'Exact';
   status: 'Negative';
+  listName?: NegativeKeywordListName;
+  source?: NegativeKeywordSource;
+  reason?: string;
 };
 
 export type ServiceContext = {
   name: string;
   landingPage: string;
 };
+
+export type WebsiteMessagingProfile = {
+  features: string[];
+  benefits: string[];
+  differentiators: string[];
+  offers: string[];
+  callsToAction: string[];
+  proofPoints: string[];
+  tone: string;
+};
+
+export type CampaignMatchTypeStrategy =
+  | 'exact_phrase'
+  | 'exact_only'
+  | 'phrase_only';
 
 export type CampaignStrategy = {
   goal: 'awareness' | 'conversions' | 'traffic';
@@ -53,6 +106,9 @@ export type CampaignStrategy = {
   focusHighIntent: boolean;
   includeInformational: boolean;
   includeNegativeCandidates: boolean;
+  competitorCampaignMode: 'exclude' | 'separate';
+  brandCampaignMode: 'exclude' | 'separate';
+  matchTypeStrategy: CampaignMatchTypeStrategy;
 };
 
 export type KeywordMetric = {
@@ -127,11 +183,21 @@ export type SubTheme = {
 
 export type AdGroupPriority = 'core' | 'recommended' | 'additional';
 
+export type ResponsiveSearchAd = {
+  headlines: string[];
+  descriptions: string[];
+  path1?: string;
+  path2?: string;
+  source: 'ai' | 'fallback' | 'manual';
+  model?: string;
+};
+
 export type AdGroup = {
   name: string;
   subThemes: SubTheme[];
   priority?: AdGroupPriority;
   priorityScore?: number;
+  responsiveSearchAd?: ResponsiveSearchAd;
 };
 
 export type CampaignStructureV2 = {

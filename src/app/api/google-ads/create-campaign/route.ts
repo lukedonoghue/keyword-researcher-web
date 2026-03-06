@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireGoogleAuth, getGoogleAdsCredentials } from '@/lib/auth/middleware';
 import { GoogleAdsService } from '@/lib/services/google-ads';
-import type { CampaignStructureV2 } from '@/lib/types/index';
+import type { CampaignStructureV2, NegativeKeyword } from '@/lib/types/index';
 import { getErrorMessage } from '@/lib/utils';
 
 export async function POST(request: NextRequest) {
@@ -21,6 +21,8 @@ export async function POST(request: NextRequest) {
       dailyBudgetMicros?: number;
       biddingStrategy?: string;
       geoTargetIds?: string[];
+      negativeKeywords?: NegativeKeyword[];
+      defaultFinalUrl?: string;
     };
 
     const campaigns = Array.isArray(payload.campaigns) ? payload.campaigns : [];
@@ -35,6 +37,7 @@ export async function POST(request: NextRequest) {
     const geoTargetIds = Array.isArray(payload.geoTargetIds)
       ? payload.geoTargetIds.filter((v): v is string => typeof v === 'string')
       : ['2840'];
+    const negativeKeywords = Array.isArray(payload.negativeKeywords) ? payload.negativeKeywords : [];
 
     const credentials = getGoogleAdsCredentials(auth.session);
     const service = new GoogleAdsService(credentials);
@@ -43,6 +46,8 @@ export async function POST(request: NextRequest) {
       dailyBudgetMicros,
       biddingStrategy,
       geoTargetIds,
+      negativeKeywords,
+      defaultFinalUrl: payload.defaultFinalUrl?.trim() || '',
     });
 
     return NextResponse.json(result);

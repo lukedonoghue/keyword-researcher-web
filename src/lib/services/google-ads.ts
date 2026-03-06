@@ -1,5 +1,5 @@
 import { GoogleAdsApi, enums } from 'google-ads-api';
-import type { CampaignStructureV2 } from '../types/index';
+import type { CampaignStructureV2, NegativeKeyword, ResponsiveSearchAd } from '../types/index';
 import type { GeoLocationSuggestion } from '../types/geo';
 
 type KeywordMetric = {
@@ -26,6 +26,8 @@ export class GoogleAdsService {
   private static readonly KEYWORD_IDEA_MAX_RESULTS = 500;
   private static readonly KEYWORD_IDEA_PAGE_SIZE = 100;
   private static readonly KEYWORD_IDEA_PAGE_LIMIT = 12;
+  private static readonly SAFE_FALLBACK_MAX_CPC_MICROS = 5_000_000;
+  private static readonly SAFE_FALLBACK_BUDGET_SHARE = 0.2;
   private client: GoogleAdsApi;
   private customerId: string;
   private refreshToken: string;
@@ -67,6 +69,65 @@ export class GoogleAdsService {
       return value as Record<string, unknown>;
     }
     return {};
+  }
+
+  private toKeywordMatchType(matchType: string) {
+    return matchType === 'Exact'
+      ? enums.KeywordMatchType.EXACT
+      : enums.KeywordMatchType.PHRASE;
+  }
+
+  private resolveSafeFallbackCpcMicros(dailyBudgetMicros: number): number {
+    const budgetShareCap = Math.round(dailyBudgetMicros * GoogleAdsService.SAFE_FALLBACK_BUDGET_SHARE);
+    return Math.max(
+      1_000_000,
+      Math.min(GoogleAdsService.SAFE_FALLBACK_MAX_CPC_MICROS, budgetShareCap || GoogleAdsService.SAFE_FALLBACK_MAX_CPC_MICROS),
+    );
+  }
+
+  private resolveAdGroupBidMicros(
+    avgCpcMicros: number,
+    options: { dailyBudgetMicros: number; biddingStrategy: string },
+  ): number | undefined {
+    if (options.biddingStrategy !== 'MANUAL_CPC') {
+      return undefined;
+    }
+
+    if (avgCpcMicros > 0) {
+      return avgCpcMicros;
+    }
+
+    return this.resolveSafeFallbackCpcMicros(options.dailyBudgetMicros);
+  }
+
+  private sanitizeAdAssetText(text: string, maxLength: number): string {
+    const normalized = text.trim().replace(/\s+/g, ' ');
+    if (normalized.length <= maxLength) return normalized;
+    return normalized.slice(0, maxLength).trim();
+  }
+
+  private createResponsiveSearchAdOperation(
+    adGroupResourceName: string,
+    finalUrl: string,
+    responsiveSearchAd: ResponsiveSearchAd,
+  ) {
+    return {
+      ad_group: adGroupResourceName,
+      status: enums.AdGroupAdStatus.PAUSED,
+      ad: {
+        final_urls: [finalUrl],
+        responsive_search_ad: {
+          headlines: responsiveSearchAd.headlines.map((headline) => ({
+            text: this.sanitizeAdAssetText(headline, 30),
+          })),
+          descriptions: responsiveSearchAd.descriptions.map((description) => ({
+            text: this.sanitizeAdAssetText(description, 90),
+          })),
+          path1: responsiveSearchAd.path1 ? this.sanitizeAdAssetText(responsiveSearchAd.path1, 15) : undefined,
+          path2: responsiveSearchAd.path2 ? this.sanitizeAdAssetText(responsiveSearchAd.path2, 15) : undefined,
+        },
+      },
+    };
   }
 
   async getCustomer() {
@@ -376,13 +437,21 @@ export class GoogleAdsService {
     const responseRecord = this.asRecord(response);
     const suggestions = Array.isArray(responseRecord.geo_target_constant_suggestions)
       ? responseRecord.geo_target_constant_suggestions
-      : Array.isArray(response) ? response : [];
+      : Array.isArray(responseRecord.geoTargetConstantSuggestions)
+        ? responseRecord.geoTargetConstantSuggestions
+        : Array.isArray(response) ? response : [];
 
     return suggestions
       .map((item: unknown) => {
         const suggestion = this.asRecord(item);
-        const constant = this.asRecord(suggestion.geo_target_constant);
-        const id = this.toNumber(constant.id);
+        const constant = this.asRecord(suggestion.geo_target_constant ?? suggestion.geoTargetConstant);
+        const resourceName = typeof constant.resource_name === 'string'
+          ? constant.resource_name
+          : typeof constant.resourceName === 'string'
+            ? constant.resourceName
+            : '';
+        const fallbackId = resourceName.split('/').pop() ?? '';
+        const id = this.toNumber(constant.id) || this.toNumber(fallbackId);
         if (!id) return null;
         const name = typeof constant.name === 'string' ? constant.name : '';
         const canonicalName = typeof constant.canonical_name === 'string'
@@ -400,7 +469,7 @@ export class GoogleAdsService {
           : typeof constant.countryCode === 'string'
             ? constant.countryCode
             : '';
-        const reach = this.toNumber(suggestion.reach);
+        const reach = this.toNumber(suggestion.reach ?? suggestion.localeReach ?? suggestion.searchInterest);
 
         return {
           id: String(id),
@@ -538,16 +607,21 @@ export class GoogleAdsService {
       dailyBudgetMicros: number;
       biddingStrategy: string;
       geoTargetIds: string[];
+      negativeKeywords?: NegativeKeyword[];
+      defaultFinalUrl?: string;
     }
-  ): Promise<{ created: { campaigns: number; adGroups: number; keywords: number }; errors: string[] }> {
+  ): Promise<{ created: { campaigns: number; adGroups: number; keywords: number; ads: number }; errors: string[] }> {
     const customer = await this.getCustomer();
     const errors: string[] = [];
     let createdCampaigns = 0;
     let createdAdGroups = 0;
     let createdKeywords = 0;
+    let createdAds = 0;
 
     for (const campaign of campaigns) {
       try {
+        const adGroupResourceNames = new Map<string, string>();
+
         // 1. Create campaign budget
         const budgetResult = await customer.campaignBudgets.create([{
           amount_micros: options.dailyBudgetMicros,
@@ -603,11 +677,12 @@ export class GoogleAdsService {
         for (const adGroup of campaign.adGroups) {
           try {
             const avgCpcMicros = this.calculateAvgCpcMicros(adGroup);
+            const adGroupBidMicros = this.resolveAdGroupBidMicros(avgCpcMicros, options);
             const adGroupResult = await customer.adGroups.create([{
               name: adGroup.name,
               campaign: campaignResourceName,
               type: enums.AdGroupType.SEARCH_STANDARD,
-              cpc_bid_micros: avgCpcMicros || options.dailyBudgetMicros,
+              ...(adGroupBidMicros ? { cpc_bid_micros: adGroupBidMicros } : {}),
               status: enums.AdGroupStatus.ENABLED,
             }]);
             const adGroupResourceName = adGroupResult.results?.[0]?.resource_name;
@@ -615,6 +690,7 @@ export class GoogleAdsService {
               errors.push(`Failed to create ad group ${adGroup.name}`);
               continue;
             }
+            adGroupResourceNames.set(adGroup.name, adGroupResourceName);
             createdAdGroups++;
 
             // 5. Create keywords for this ad group (batch all sub-themes)
@@ -644,8 +720,77 @@ export class GoogleAdsService {
                 }
               }
             }
+
+            const finalUrl = campaign.landingPage?.trim() || options.defaultFinalUrl?.trim();
+            if (finalUrl && adGroup.responsiveSearchAd?.headlines.length && adGroup.responsiveSearchAd.descriptions.length) {
+              try {
+                const adResult = await customer.adGroupAds.create([
+                  this.createResponsiveSearchAdOperation(adGroupResourceName, finalUrl, adGroup.responsiveSearchAd),
+                ]);
+                createdAds += adResult.results?.length ?? 1;
+              } catch (err) {
+                errors.push(`Failed to create RSA for ${adGroup.name}: ${err instanceof Error ? err.message : 'unknown error'}`);
+              }
+            }
           } catch (err) {
             errors.push(`Failed to create ad group ${adGroup.name}: ${err instanceof Error ? err.message : 'unknown error'}`);
+          }
+        }
+
+        const campaignNegativeKeywords = (options.negativeKeywords ?? [])
+          .filter((item) => item.campaign === campaign.campaignName);
+
+        if (campaignNegativeKeywords.length > 0) {
+          const campaignLevelNegatives = campaignNegativeKeywords
+            .filter((item) => !item.adGroup)
+            .map((item) => ({
+              campaign: campaignResourceName,
+              negative: true,
+              keyword: {
+                text: item.keyword,
+                match_type: this.toKeywordMatchType(item.matchType),
+              },
+            }));
+
+          if (campaignLevelNegatives.length > 0) {
+            try {
+              await customer.campaignCriteria.create(campaignLevelNegatives);
+            } catch (err) {
+              errors.push(`Failed to create campaign negatives for ${campaign.campaignName}: ${err instanceof Error ? err.message : 'unknown error'}`);
+            }
+          }
+
+          const adGroupNegativeOperations = new Map<string, Array<{
+            ad_group: string;
+            negative: boolean;
+            keyword: { text: string; match_type: ReturnType<GoogleAdsService['toKeywordMatchType']> };
+          }>>();
+
+          for (const item of campaignNegativeKeywords.filter((keyword) => Boolean(keyword.adGroup))) {
+            const adGroupResourceName = adGroupResourceNames.get(item.adGroup);
+            if (!adGroupResourceName) {
+              errors.push(`Failed to find ad group ${item.adGroup} for negative keyword ${item.keyword}`);
+              continue;
+            }
+
+            const existing = adGroupNegativeOperations.get(item.adGroup) ?? [];
+            existing.push({
+              ad_group: adGroupResourceName,
+              negative: true,
+              keyword: {
+                text: item.keyword,
+                match_type: this.toKeywordMatchType(item.matchType),
+              },
+            });
+            adGroupNegativeOperations.set(item.adGroup, existing);
+          }
+
+          for (const [adGroupName, operations] of adGroupNegativeOperations.entries()) {
+            try {
+              await customer.adGroupCriteria.create(operations);
+            } catch (err) {
+              errors.push(`Failed to create negative keywords for ${adGroupName}: ${err instanceof Error ? err.message : 'unknown error'}`);
+            }
           }
         }
       } catch (err) {
@@ -654,7 +799,7 @@ export class GoogleAdsService {
     }
 
     return {
-      created: { campaigns: createdCampaigns, adGroups: createdAdGroups, keywords: createdKeywords },
+      created: { campaigns: createdCampaigns, adGroups: createdAdGroups, keywords: createdKeywords, ads: createdAds },
       errors,
     };
   }

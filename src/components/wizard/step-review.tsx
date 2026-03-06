@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useWorkflow } from '@/providers/workflow-provider';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -12,6 +12,11 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
 import { Search, SearchX, X, ChevronUp, ChevronDown, ChevronRight, Hash, DollarSign, TrendingUp, Target } from 'lucide-react';
 import { calculateBudgetTiers } from '@/lib/logic/budget-calculator';
+import {
+  buildReviewNegativeKeywordLists,
+  flattenReviewNegativeKeywords,
+  mergeReviewNegativeKeywordLists,
+} from '@/lib/logic/negative-keywords';
 
 const intentColors: Record<string, string> = {
   transactional: 'bg-green-100 text-green-800 border-green-200 dark:bg-green-950 dark:text-green-300 dark:border-green-800',
@@ -39,19 +44,6 @@ const qualityDotColors: Record<string, string> = {
   'D': 'bg-red-500',
 };
 
-const strongNegativeIntentPatterns = [
-  /\b(competitor|vs|versus|alternative|alternatives)\b/i,
-  /\b(reddit|wikipedia|youtube|forum)\b/i,
-  /\b(job|jobs|career|careers|salary|salaries|internship)\b/i,
-  /\b(login|signin|sign in|account|support|help desk|faq|privacy|policy|terms|contact us)\b/i,
-  /\b(diy|do it yourself|how to|tutorial|guide)\b/i,
-  /\b(used|second hand|secondhand|free)\b/i,
-];
-
-function hasStrongNegativeIntentSignal(text: string): boolean {
-  return strongNegativeIntentPatterns.some((pattern) => pattern.test(text));
-}
-
 type SortKey = 'text' | 'volume' | 'cpc' | 'intent' | 'quality';
 type SortDir = 'asc' | 'desc';
 type IntentFilter = 'all' | 'transactional' | 'commercial' | 'informational' | 'navigational';
@@ -76,57 +68,46 @@ export function StepReview() {
   const [sortKey, setSortKey] = useState<SortKey>('volume');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
   const [removedIndices, setRemovedIndices] = useState<Set<number>>(() => new Set());
-  const [showSuppressed, setShowSuppressed] = useState(false);
-  const [excludedNegatives, setExcludedNegatives] = useState<Set<number>>(() => new Set());
+  const [openNegativeLists, setOpenNegativeLists] = useState<Record<string, boolean>>({
+    competitor: true,
+    universal: true,
+    brand: false,
+    funnel: false,
+  });
 
   const suppressedKeywords = state.enhancedSuppressed.length > 0 ? state.enhancedSuppressed : state.suppressedKeywords;
 
-  // Build conservative negative candidates:
-  // - explicit competitor brand suppressions
-  // - AI/strategy negative suppressions only when keyword text has strong negative-intent signals
-  // - explicit competitor names from research
-  const negativeCandidates = useMemo(() => {
-    const items: { text: string; reasons: string[] }[] = [];
-    for (const kw of suppressedKeywords) {
-      const reasons = kw.suppressionReasons.map((reason) => reason.trim()).filter(Boolean);
-      if (reasons.length === 0) continue;
-      const lowered = reasons.map((reason) => reason.toLowerCase());
-      const hasCompetitorReason = lowered.some((reason) => reason.includes('competitor brand'));
-      const hasNegativeIntentReason = lowered.some(
-        (reason) =>
-          reason.includes('negative intent') ||
-          reason.includes('low-value target') ||
-          reason.includes('ai flagged as negative') ||
-          reason.includes('irrelevant')
-      );
+  const generatedNegativeLists = useMemo(
+    () => buildReviewNegativeKeywordLists({
+      suppressedKeywords,
+      competitorNames: state.competitorNames,
+      businessName: state.businessName,
+      targetDomain: state.targetDomain,
+      enableBrandList: state.strategy.brandCampaignMode === 'separate',
+    }),
+    [suppressedKeywords, state.businessName, state.competitorNames, state.strategy.brandCampaignMode, state.targetDomain]
+  );
 
-      // Prevent strategy-filtered terms (volume/CPC/informational) from becoming negatives by default.
-      if (hasCompetitorReason || (hasNegativeIntentReason && hasStrongNegativeIntentSignal(kw.text))) {
-        items.push({ text: kw.text, reasons });
-      }
-    }
-    // Add competitor names as negative candidates (from competitor research)
-    for (const name of state.competitorNames) {
-      if (!items.some(item => item.text.toLowerCase() === name.toLowerCase())) {
-        items.push({ text: name, reasons: ['Local competitor brand (from competitor research)'] });
-      }
-    }
-    return items;
-  }, [suppressedKeywords, state.competitorNames]);
+  const reviewNegativeLists = useMemo(
+    () => mergeReviewNegativeKeywordLists(generatedNegativeLists, state.reviewNegativeKeywordLists),
+    [generatedNegativeLists, state.reviewNegativeKeywordLists]
+  );
 
-  const selectedNegativeKeywords = useMemo(() => {
-    const seen = new Set<string>();
-    const selected: string[] = [];
-    for (const [idx, item] of negativeCandidates.entries()) {
-      if (excludedNegatives.has(idx)) continue;
-      const keyword = item.text.trim();
-      const key = keyword.toLowerCase();
-      if (!keyword || seen.has(key)) continue;
-      seen.add(key);
-      selected.push(keyword);
-    }
-    return selected;
-  }, [negativeCandidates, excludedNegatives]);
+  const selectedNegativeKeywords = useMemo(
+    () => flattenReviewNegativeKeywords(reviewNegativeLists),
+    [reviewNegativeLists]
+  );
+
+  const enabledNegativeCounts = useMemo(
+    () =>
+      Object.fromEntries(
+        reviewNegativeLists.map((list) => [
+          list.name,
+          list.items.filter((item) => item.enabled).length,
+        ])
+      ) as Record<string, number>,
+    [reviewNegativeLists]
+  );
 
   const handleSort = (key: SortKey) => {
     if (sortKey === key) {
@@ -142,6 +123,36 @@ export function StepReview() {
       const next = new Set(prev);
       next.add(originalIndex);
       return next;
+    });
+  };
+
+  const setNegativeItemEnabled = (listName: string, itemIndex: number, enabled: boolean) => {
+    dispatch({
+      type: 'SET_REVIEW_NEGATIVE_KEYWORD_LISTS',
+      lists: reviewNegativeLists.map((list) =>
+        list.name === listName
+          ? {
+            ...list,
+            items: list.items.map((item, index) =>
+              index === itemIndex ? { ...item, enabled } : item
+            ),
+          }
+          : list
+      ),
+    });
+  };
+
+  const setAllNegativeItemsEnabled = (listName: string, enabled: boolean) => {
+    dispatch({
+      type: 'SET_REVIEW_NEGATIVE_KEYWORD_LISTS',
+      lists: reviewNegativeLists.map((list) =>
+        list.name === listName
+          ? {
+            ...list,
+            items: list.items.map((item) => ({ ...item, enabled })),
+          }
+          : list
+      ),
     });
   };
 
@@ -260,6 +271,7 @@ export function StepReview() {
         suppressed: state.suppressedKeywords,
       });
     }
+    dispatch({ type: 'SET_REVIEW_NEGATIVE_KEYWORD_LISTS', lists: reviewNegativeLists });
     dispatch({ type: 'SET_REVIEW_NEGATIVE_KEYWORDS', keywords: selectedNegativeKeywords });
     dispatch({ type: 'SET_STEP', step: 'campaign' });
   };
@@ -403,7 +415,66 @@ export function StepReview() {
       )}
 
       {/* Table */}
-      <Card>
+      <Card className="md:hidden">
+        <CardContent className="p-0">
+          {filteredKeywords.length === 0 ? (
+            <div className="flex flex-col items-center gap-2 py-8">
+              <SearchX className="h-8 w-8 text-muted-foreground/40" />
+              <p className="text-xs text-muted-foreground">No keywords match the current filters.</p>
+            </div>
+          ) : (
+            <ScrollArea className="h-[calc(100vh-360px)]">
+              <div className="divide-y divide-border/70">
+                {filteredKeywords.map(({ kw, originalIndex }) => (
+                  <div key={`${kw.text}-${originalIndex}`} className="px-3 py-3 space-y-2">
+                    <div className="flex items-start justify-between gap-3">
+                      <p className="text-xs font-mono leading-5">{kw.text}</p>
+                      <button
+                        onClick={() => handleRemove(originalIndex)}
+                        className="rounded p-0.5 hover:bg-destructive/10 hover:text-destructive"
+                        aria-label={`Remove keyword "${kw.text}"`}
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <Badge className={`text-[10px] px-1.5 py-0 border-0 capitalize ${intentColors[kw.intent || 'unknown']}`}>
+                        {kw.intent || 'unknown'}
+                      </Badge>
+                      {kw.qualityRating ? (
+                        <Badge className={`text-[10px] px-1.5 py-0 border inline-flex items-center gap-1 ${qualityColors[kw.qualityRating] || ''}`}>
+                          <span className={`h-1.5 w-1.5 rounded-full ${qualityDotColors[kw.qualityRating] || 'bg-muted-foreground'}`} />
+                          {kw.qualityRating}
+                        </Badge>
+                      ) : null}
+                      <span className="text-[10px] text-muted-foreground">{kw.source}</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3 text-[11px]">
+                      <div>
+                        <p className="text-muted-foreground uppercase tracking-wide">Volume</p>
+                        <p className="tabular-nums">{kw.volume.toLocaleString()}</p>
+                      </div>
+                      <div>
+                        <p className="text-muted-foreground uppercase tracking-wide">CPC</p>
+                        <p className="tabular-nums">
+                          ${kw.cpc.toFixed(2)}
+                          {(kw.cpcLow || kw.cpcHigh) ? (
+                            <span className="block text-[10px] text-muted-foreground">
+                              ${(kw.cpcLow || kw.cpc).toFixed(2)}–${(kw.cpcHigh || kw.cpc).toFixed(2)}
+                            </span>
+                          ) : null}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </ScrollArea>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card className="hidden md:block">
         <CardContent className="p-0">
           <ScrollArea className="h-[calc(100vh-400px)]">
             <Table>
@@ -530,70 +601,146 @@ export function StepReview() {
         </div>
       )}
 
-      {/* Suppressed keywords + competitor brands as negative candidates (#8) */}
-      {negativeCandidates.length > 0 && (
-        <Card>
-          <CardContent className="p-0">
-            <button
-              type="button"
-              className="flex items-center gap-2 w-full px-4 py-3 text-left hover:bg-muted/30 transition-colors"
-              onClick={() => setShowSuppressed(!showSuppressed)}
-            >
-              <ChevronRight className={`h-3.5 w-3.5 text-muted-foreground transition-transform ${showSuppressed ? 'rotate-90' : ''}`} />
-              <span className="text-xs font-medium">Suggested Negative Keywords</span>
-              <Badge variant="secondary" className="text-[10px] ml-auto">
-                {selectedNegativeKeywords.length} selected
-              </Badge>
-            </button>
-            {showSuppressed && (
-              <div className="border-t">
-                <div className="px-4 py-2 border-b bg-muted/20">
-                  <p className="text-[11px] text-muted-foreground">
-                    Suggested negatives are limited to strong negative-intent terms and competitor brands.
-                  </p>
+      {/* Structured negative keyword review */}
+      <div className="space-y-3">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-semibold">Negative Keyword Lists</h3>
+            <p className="text-[11px] text-muted-foreground mt-0.5">
+              Review shared exclusions before build. Routing negatives are generated after the campaign structure is built, and brand exclusions stay off unless you explicitly enable them.
+            </p>
+          </div>
+          <Badge variant="secondary" className="text-[10px]">
+            {selectedNegativeKeywords.length} selected
+          </Badge>
+        </div>
+
+        {state.strategy.competitorCampaignMode === 'separate' && (
+          <Card className="border-brand-accent/30 bg-brand-accent/5">
+            <CardContent className="px-4 py-3">
+              <p className="text-[11px] text-muted-foreground">
+                Competitor handling is set to <span className="font-medium text-foreground">Build Competitor Campaign</span>.
+                Competitor negatives will still be applied to standard campaigns, and a separate competitor campaign will be created when matching terms exist.
+              </p>
+            </CardContent>
+          </Card>
+        )}
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+          {reviewNegativeLists.map((list) => (
+            <Card key={`${list.name}-summary`} className="border-border/70">
+              <CardContent className="px-3 py-3 space-y-1">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs font-medium">{list.label}</p>
+                  <Badge variant="outline" className="text-[10px]">
+                    {enabledNegativeCounts[list.name] ?? 0}
+                    {list.name !== 'funnel' && list.items.length > 0 ? ` / ${list.items.length}` : ''}
+                  </Badge>
                 </div>
-                <ScrollArea className="max-h-[300px]">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead className="text-[11px] w-[30px]" />
-                        <TableHead className="text-[11px]">Keyword</TableHead>
-                        <TableHead className="text-[11px]">Reason</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {negativeCandidates.map((item, idx) => (
-                        <TableRow key={`${item.text}-${idx}`} className="h-8">
-                          <TableCell className="py-1">
-                            <Checkbox
-                              checked={!excludedNegatives.has(idx)}
-                              onCheckedChange={(checked) => {
-                                setExcludedNegatives((prev) => {
-                                  const next = new Set(prev);
-                                  if (checked) {
-                                    next.delete(idx);
-                                  } else {
-                                    next.add(idx);
-                                  }
-                                  return next;
-                                });
-                              }}
-                            />
-                          </TableCell>
-                          <TableCell className="text-xs font-mono py-1">{item.text}</TableCell>
-                          <TableCell className="text-[11px] text-muted-foreground py-1">
-                            {item.reasons.join('; ')}
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </ScrollArea>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      )}
+                <p className="text-[11px] text-muted-foreground">{list.description}</p>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+
+        {reviewNegativeLists.map((list) => {
+          const isOpen = openNegativeLists[list.name] ?? false;
+          const enabledCount = enabledNegativeCounts[list.name] ?? 0;
+          const isPlaceholder = list.name === 'funnel' && list.items.length === 0;
+
+          return (
+            <Card key={list.name}>
+              <CardContent className="p-0">
+                <button
+                  type="button"
+                  className="flex items-center gap-2 w-full px-4 py-3 text-left hover:bg-muted/30 transition-colors"
+                  onClick={() => setOpenNegativeLists((prev) => ({ ...prev, [list.name]: !isOpen }))}
+                >
+                  <ChevronRight className={`h-3.5 w-3.5 text-muted-foreground transition-transform ${isOpen ? 'rotate-90' : ''}`} />
+                  <span className="text-xs font-medium">{list.label}</span>
+                  <Badge variant="secondary" className="text-[10px] ml-auto">
+                    {enabledCount} enabled
+                  </Badge>
+                </button>
+                {isOpen && (
+                  <div className="border-t">
+                    <div className="flex items-center justify-between gap-3 px-4 py-2 border-b bg-muted/20">
+                      <p className="text-[11px] text-muted-foreground">{list.description}</p>
+                      {!isPlaceholder && list.items.length > 0 && (
+                        <div className="flex items-center gap-3">
+                          <button
+                            type="button"
+                            className="text-[11px] text-muted-foreground hover:text-foreground underline underline-offset-2"
+                            onClick={() => setAllNegativeItemsEnabled(list.name, true)}
+                          >
+                            Enable all
+                          </button>
+                          <button
+                            type="button"
+                            className="text-[11px] text-muted-foreground hover:text-foreground underline underline-offset-2"
+                            onClick={() => setAllNegativeItemsEnabled(list.name, false)}
+                          >
+                            Clear all
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
+                    {isPlaceholder ? (
+                      <div className="px-4 py-3">
+                        <p className="text-[11px] text-muted-foreground">
+                          Funnel negatives are generated from the final campaign structure so catch-all ad groups can hand off specific queries to more focused ad groups and campaigns.
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="max-h-[300px] overflow-auto">
+                        <Table className="min-w-[760px]">
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead className="text-[11px] w-[30px]" />
+                              <TableHead className="text-[11px]">Keyword</TableHead>
+                              <TableHead className="text-[11px]">Match</TableHead>
+                              <TableHead className="text-[11px]">Source</TableHead>
+                              <TableHead className="text-[11px]">Reason</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {list.items.map((item, index) => (
+                              <TableRow key={`${list.name}-${item.keyword}-${index}`} className="h-8">
+                                <TableCell className="py-1">
+                                  <Checkbox
+                                    checked={item.enabled}
+                                    onCheckedChange={(checked) => setNegativeItemEnabled(list.name, index, !!checked)}
+                                  />
+                                </TableCell>
+                                <TableCell className="text-xs font-mono py-1">
+                                  {item.keyword}
+                                  {item.variants && item.variants.length > 1 && (
+                                    <span className="ml-2 text-[10px] text-muted-foreground">
+                                      +{item.variants.length - 1} variant{item.variants.length - 1 === 1 ? '' : 's'}
+                                    </span>
+                                  )}
+                                </TableCell>
+                                <TableCell className="text-[11px] py-1">{item.matchType}</TableCell>
+                                <TableCell className="text-[11px] py-1 capitalize text-muted-foreground">
+                                  {item.source.replace(/_/g, ' ')}
+                                </TableCell>
+                                <TableCell className="text-[11px] text-muted-foreground py-1">
+                                  {item.reasons.join('; ')}
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          );
+        })}
+      </div>
     </div>
   );
 }

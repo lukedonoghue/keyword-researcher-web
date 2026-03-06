@@ -88,18 +88,11 @@ export function StepSetup() {
                       <HelpCircle className="h-3.5 w-3.5 text-muted-foreground/60 cursor-help shrink-0" />
                     </TooltipTrigger>
                     <TooltipContent side="top" className="max-w-56">
-                      Powered by OpenRouter — used for AI-driven service discovery and keyword enhancement.
+                      Powered by OpenRouter. Service discovery uses Perplexity, and keyword enhancement defaults to Gemini 3 Flash.
                     </TooltipContent>
                   </Tooltip>
                 </div>
-                {aiKeyReady ? (
-                  <div className="flex items-center gap-1.5">
-                    <Check className="h-3.5 w-3.5 text-green-500" />
-                    <span className="text-xs text-muted-foreground">Key saved</span>
-                  </div>
-                ) : (
-                  <OpenRouterKeyInput />
-                )}
+                <OpenRouterKeyInput />
               </div>
             </div>
           </div>

@@ -1,11 +1,11 @@
 import { NextResponse } from 'next/server';
-import { getSession, type SessionData } from './session';
+import { ensureDevSession, getSession, type SessionData } from './session';
 import type { IronSession } from 'iron-session';
 
 export async function requireGoogleAuth(): Promise<
   { session: IronSession<SessionData>; error?: never } | { session?: never; error: NextResponse }
 > {
-  const session = await getSession();
+  const session = await ensureDevSession(await getSession());
 
   if (!session.refreshToken) {
     return {
