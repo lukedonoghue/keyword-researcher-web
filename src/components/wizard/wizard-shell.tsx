@@ -6,6 +6,7 @@ import { StepDiscover } from './step-discover';
 import { StepGeo } from './step-geo';
 import { StepStrategy } from './step-strategy';
 import { StepResearch } from './step-research';
+import { StepCompetitors } from './step-competitors';
 import { StepEnhance } from './step-enhance';
 import { StepReview } from './step-review';
 import { StepCampaign } from './step-campaign';
@@ -19,6 +20,7 @@ export function WizardShell() {
     geo: StepGeo,
     strategy: StepStrategy,
     research: StepResearch,
+    competitors: StepCompetitors,
     enhance: StepEnhance,
     review: StepReview,
     campaign: StepCampaign,

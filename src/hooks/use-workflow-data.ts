@@ -58,6 +58,14 @@ type ResearchKeywordsResult = {
   cpcDebug: ServiceCpcDebug[];
 };
 
+function chunkStrings(values: string[], size: number): string[][] {
+  const chunks: string[][] = [];
+  for (let index = 0; index < values.length; index += size) {
+    chunks.push(values.slice(index, index + size));
+  }
+  return chunks;
+}
+
 type GoogleKeywordApi = {
   text?: string;
   volume?: number;
@@ -245,6 +253,12 @@ export function useWorkflowData() {
 
       const googleKeywords: SeedKeyword[] = [];
       const cpcDebugEntries: ServiceCpcDebug[] = [];
+      const effectiveGeoTargets = geoOverrides?.geoTargets ?? state.geoTargets;
+      const effectiveGeoTargetId = geoOverrides?.geoTargetId ?? state.geoTargetId;
+      const geoTargetIds = effectiveGeoTargets.length > 0
+        ? effectiveGeoTargets.map(t => t.id)
+        : [effectiveGeoTargetId];
+
       for (const service of state.selectedServices) {
         const discoverySeeds = discoveredSvcMap.get(service) ?? [];
         const perplexityForService = (perplexityByService.get(service) ?? []).slice(0, 5);
@@ -268,12 +282,6 @@ export function useWorkflowData() {
           ...contextSeeds,
           ...topCities.map(city => `${service} ${city}`),
         ].filter(Boolean);
-
-        const effectiveGeoTargets = geoOverrides?.geoTargets ?? state.geoTargets;
-        const effectiveGeoTargetId = geoOverrides?.geoTargetId ?? state.geoTargetId;
-        const geoTargetIds = effectiveGeoTargets.length > 0
-          ? effectiveGeoTargets.map(t => t.id)
-          : [effectiveGeoTargetId];
 
         try {
           const googleRes = await fetch('/api/google-ads/keywords', {
@@ -310,6 +318,57 @@ export function useWorkflowData() {
           }
         } catch (err) {
           console.warn(`[research] GKP call error for "${service}":`, err);
+        }
+      }
+
+      const competitorSeedTexts = Array.from(
+        new Set(
+          [
+            ...competitorNames,
+            ...perplexitySeedTexts,
+          ]
+            .map((value) => value.trim())
+            .filter(Boolean)
+        )
+      ).slice(0, 50);
+
+      for (const [batchIndex, competitorSeeds] of chunkStrings(competitorSeedTexts, 20).entries()) {
+        try {
+          const googleRes = await fetch('/api/google-ads/keywords', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              seedKeywords: competitorSeeds,
+              targetUrl: '',
+              languageId: state.languageId,
+              geoTargetIds,
+            }),
+          });
+
+          if (googleRes.ok) {
+            const googleData = await googleRes.json() as GoogleKeywordsResponse;
+            const keywordRows = Array.isArray(googleData.keywords) ? googleData.keywords : [];
+            const parsed = keywordRows
+              .filter((kw): kw is Required<Pick<GoogleKeywordApi, 'text'>> & GoogleKeywordApi => typeof kw.text === 'string' && kw.text.trim().length > 0)
+              .map((kw) => ({
+                text: kw.text.trim(),
+                volume: typeof kw.volume === 'number' ? kw.volume : 0,
+                cpc: typeof kw.cpc === 'number' ? kw.cpc : 0,
+                cpcLow: typeof kw.cpcLow === 'number' ? kw.cpcLow : 0,
+                cpcHigh: typeof kw.cpcHigh === 'number' ? kw.cpcHigh : 0,
+                competition: typeof kw.competition === 'string' ? kw.competition : '',
+                competitionIndex: typeof kw.competitionIndex === 'number' ? kw.competitionIndex : 0,
+                source: 'google_ads' as const,
+              }));
+
+            if (googleData._cpcDebug) {
+              cpcDebugEntries.push({ service: `Competitors ${batchIndex + 1}`, debug: googleData._cpcDebug });
+            }
+
+            googleKeywords.push(...parsed);
+          }
+        } catch (err) {
+          console.warn(`[research] GKP competitor batch ${batchIndex + 1} error:`, err);
         }
       }
 

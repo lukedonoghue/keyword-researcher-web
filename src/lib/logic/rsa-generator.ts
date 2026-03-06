@@ -19,7 +19,10 @@ const PATH_LIMIT = 15;
 type RsaBatchRequest = {
   campaignName: string;
   campaignTheme: string;
+  campaignType: 'service' | 'brand' | 'competitor';
   adGroupName: string;
+  serviceName: string;
+  competitorBrand?: string;
   landingPage?: string;
   keywords: string[];
 };
@@ -116,10 +119,28 @@ function isBrandCampaign(campaign: CampaignStructureV2): boolean {
   return /^brand\s*-/i.test(campaign.campaignName.trim());
 }
 
+function isCompetitorCampaign(campaign: CampaignStructureV2): boolean {
+  return /^competitor\s*-/i.test(campaign.campaignName.trim());
+}
+
 function deriveServiceName(campaign: CampaignStructureV2, adGroup: AdGroup): string {
+  if (isCompetitorCampaign(campaign)) {
+    const fromCompetitorCampaign = campaign.campaignName.replace(/^Competitor\s*-\s*/i, '').trim();
+    if (fromCompetitorCampaign) return fromCompetitorCampaign;
+  }
+
+  if (isBrandCampaign(campaign)) {
+    const fromBrandCampaign = campaign.campaignName.replace(/^Brand\s*-\s*/i, '').trim();
+    if (fromBrandCampaign) return fromBrandCampaign;
+  }
+
   const fromCampaign = campaign.campaignName.replace(/^Service\s*-\s*/i, '').trim();
   if (fromCampaign) return fromCampaign;
   return adGroup.name.replace(/\s-\s(?:Action|Research)(?::.*)?$/i, '').trim();
+}
+
+function getCompetitorBrandName(adGroup: AdGroup): string {
+  return adGroup.name.replace(/^Competitor\s*-\s*/i, '').trim();
 }
 
 function getDedupedAdGroupKeywords(adGroup: AdGroup): string[] {
@@ -163,20 +184,21 @@ function buildFallbackRsa(
   const contextTerm = pickMessagingSnippet(options.contextTerms);
   const businessName = options.businessName;
   const brandCampaign = isBrandCampaign(campaign);
+  const competitorCampaign = isCompetitorCampaign(campaign);
 
   const headlines = sanitizeHeadlines([
-    brandCampaign && businessName ? `Official ${businessName}` : serviceName,
     brandCampaign && businessName ? `${businessName} Official Site` : '',
-    primaryKeyword,
-    `Book ${serviceName}`,
-    `${serviceName} Quotes`,
-    `${serviceName} Near You`,
+    brandCampaign && businessName ? `Official ${businessName}` : serviceName,
+    competitorCampaign ? `Trusted ${serviceName}` : primaryKeyword,
+    competitorCampaign ? 'Why Customers Choose Us' : `Book ${serviceName}`,
+    competitorCampaign ? `Compare ${serviceName}` : `${serviceName} Quotes`,
+    competitorCampaign ? `Local ${serviceName} Experts` : `${serviceName} Near You`,
     offer,
     proof,
-    secondaryKeyword,
+    competitorCampaign ? 'Get A Fast Quote' : secondaryKeyword,
     differentiator,
     benefit,
-    `Fast ${serviceName}`,
+    competitorCampaign ? 'Better Service Options' : `Fast ${serviceName}`,
     businessName ?? '',
     `Trusted ${serviceName}`,
     cta,
@@ -185,9 +207,15 @@ function buildFallbackRsa(
   const descriptions = sanitizeDescriptions([
     brandCampaign && businessName
       ? `Choose the official ${businessName} team for ${serviceName.toLowerCase()} and brand-specific searches.`
+      : competitorCampaign
+        ? `Compare your ${serviceName.toLowerCase()} options and see why customers choose us for stronger service and fast quotes.`
       : `Get expert ${serviceName.toLowerCase()} with clear pricing, strong coverage, and fast quote turnaround.`,
-    `${benefit || `Get ${serviceName.toLowerCase()} help that fits your location and service goals`}. ${cta || `Request a quote today`}.`,
-    `${differentiator || proof || `Built around ${adGroupTopic.toLowerCase()} searches so traffic lands in the right ad group`}.`,
+    competitorCampaign
+      ? `${benefit || `See why customers prefer our team for ${serviceName.toLowerCase()} when they are comparing options`}. ${cta || `Request a quote today`}.`
+      : `${benefit || `Get ${serviceName.toLowerCase()} help that fits your location and service goals`}. ${cta || `Request a quote today`}.`,
+    competitorCampaign
+      ? `${differentiator || proof || 'Local expertise, clear pricing, and direct support without the runaround'}.`
+      : `${differentiator || proof || `Built around ${adGroupTopic.toLowerCase()} searches so traffic lands in the right ad group`}.`,
     businessName
       ? `${businessName} helps customers compare options, request pricing, and move forward with confidence${contextTerm ? ` for ${contextTerm}` : ''}.`
       : '',
@@ -199,13 +227,36 @@ function buildFallbackRsa(
     descriptions: descriptions.length >= 2
       ? descriptions
       : sanitizeDescriptions([
-        `Get expert ${serviceName.toLowerCase()} with fast quotes and clear next steps.`,
-        `Talk to a specialist today and start with a service that fits your location and budget.`,
+        competitorCampaign
+          ? `Get expert ${serviceName.toLowerCase()} with fast quotes and a better-fit alternative.`
+          : `Get expert ${serviceName.toLowerCase()} with fast quotes and clear next steps.`,
+        competitorCampaign
+          ? `Talk to a specialist today and compare a stronger option for your location and budget.`
+          : `Talk to a specialist today and start with a service that fits your location and budget.`,
       ]),
     path1: sanitizePath(serviceName),
-    path2: sanitizePath(adGroupTopic),
+    path2: sanitizePath(competitorCampaign ? 'compare' : adGroupTopic),
     source: 'fallback',
   };
+}
+
+function stripCompetitorMentions(values: string[], competitorBrand: string | undefined): string[] {
+  if (!competitorBrand?.trim()) return values;
+  const normalizedBrand = normalizeKeywordText(competitorBrand);
+  if (!normalizedBrand) return values;
+  return values.filter((value) => !normalizeKeywordText(value).includes(normalizedBrand));
+}
+
+function ensureBrandLeadingHeadline(headlines: string[], businessName: string | undefined): string[] {
+  if (!businessName?.trim()) return headlines;
+  const normalizedBusiness = normalizeKeywordText(businessName);
+  const leadHeadline = trimToLimit(`${businessName.trim()} Official Site`, HEADLINE_LIMIT);
+  const hasBrandMention = headlines.some((headline) => normalizeKeywordText(headline).includes(normalizedBusiness));
+  const ordered = hasBrandMention ? headlines : [leadHeadline, ...headlines];
+  const withoutDuplicateLead = ordered.filter((headline, index) => (
+    index === 0 || normalizeKeywordText(headline) !== normalizeKeywordText(leadHeadline)
+  ));
+  return sanitizeHeadlines([leadHeadline, ...withoutDuplicateLead]);
 }
 
 function sanitizeGeneratedRsa(
@@ -216,10 +267,19 @@ function sanitizeGeneratedRsa(
     path2?: string;
   },
   fallback: ResponsiveSearchAd,
+  context: {
+    businessName?: string;
+    brandCampaign: boolean;
+    competitorBrand?: string;
+  },
   model: string,
 ): ResponsiveSearchAd {
-  const headlines = sanitizeHeadlines(input.headlines ?? []);
-  const descriptions = sanitizeDescriptions(input.descriptions ?? []);
+  const rawHeadlines = stripCompetitorMentions(input.headlines ?? [], context.competitorBrand);
+  const rawDescriptions = stripCompetitorMentions(input.descriptions ?? [], context.competitorBrand);
+  const headlines = context.brandCampaign
+    ? ensureBrandLeadingHeadline(sanitizeHeadlines(rawHeadlines), context.businessName)
+    : sanitizeHeadlines(rawHeadlines);
+  const descriptions = sanitizeDescriptions(rawDescriptions);
 
   return {
     headlines: headlines.length >= 3 ? headlines : fallback.headlines,
@@ -262,7 +322,10 @@ export async function generateResponsiveSearchAds(
       requests.push({
         campaignName: campaign.campaignName,
         campaignTheme: campaign.campaignTheme,
+        campaignType: isBrandCampaign(campaign) ? 'brand' : isCompetitorCampaign(campaign) ? 'competitor' : 'service',
         adGroupName: adGroup.name,
+        serviceName: deriveServiceName(campaign, adGroup),
+        competitorBrand: isCompetitorCampaign(campaign) ? getCompetitorBrandName(adGroup) : undefined,
         landingPage: campaign.landingPage,
         keywords: getDedupedAdGroupKeywords(adGroup),
       });
@@ -290,13 +353,15 @@ Requirements:
 - 3 to 4 unique descriptions, each 90 characters or fewer
 - Optional path1 and path2, each 15 characters or fewer
 - Match the user's service intent and ad-group topic
-- Use direct-response search language that improves CTR and lead quality
-- Prefer concrete hooks supported by the business: quote, pricing, speed, local coverage, licensing, warranty, reviews, trust, official brand, financing, or availability when provided
-- Balance headline types across benefit, proof, offer, keyword relevance, and CTA
-- For brand campaigns, make the ad clearly feel official and navigational
-- For local service campaigns, make the ad feel action-oriented, specific, and conversion-focused
-- Avoid clickbait, unsupported claims, ALL CAPS, keyword stuffing, and excessive punctuation
-Return JSON only: { "ads": [{ "campaignName": string, "adGroupName": string, "headlines": string[], "descriptions": string[], "path1"?: string, "path2"?: string }] }`,
+	- Use direct-response search language that improves CTR and lead quality
+	- Prefer concrete hooks supported by the business: quote, pricing, speed, local coverage, licensing, warranty, reviews, trust, official brand, financing, or availability when provided
+	- Balance headline types across benefit, proof, offer, keyword relevance, and CTA
+	- For brand campaigns, the first headline must include the exact business name and feel official/navigational
+	- For competitor campaigns, do not mention competitor brand names in headlines or descriptions even if the ad group is based on competitor searches
+	- For competitor campaigns, frame the copy as a stronger alternative with proof, pricing clarity, local expertise, or service advantages
+	- For local service campaigns, make the ad feel action-oriented, specific, and conversion-focused
+	- Avoid clickbait, unsupported claims, ALL CAPS, keyword stuffing, and excessive punctuation
+	Return JSON only: { "ads": [{ "campaignName": string, "adGroupName": string, "headlines": string[], "descriptions": string[], "path1"?: string, "path2"?: string }] }`,
         JSON.stringify({
           businessName: options.businessName ?? '',
           businessDescription: options.businessDescription ?? '',
@@ -319,7 +384,12 @@ Return JSON only: { "ads": [{ "campaignName": string, "adGroupName": string, "he
         const key = `${ad.campaignName}|||${ad.adGroupName}`;
         const fallback = fallbacks.get(key);
         if (!fallback) continue;
-        generated.set(key, sanitizeGeneratedRsa(ad, fallback, client.getModel()));
+        const request = batch.find((item) => item.campaignName === ad.campaignName && item.adGroupName === ad.adGroupName);
+        generated.set(key, sanitizeGeneratedRsa(ad, fallback, {
+          businessName: options.businessName,
+          brandCampaign: request?.campaignType === 'brand',
+          competitorBrand: request?.competitorBrand,
+        }, client.getModel()));
       }
     } catch {
       // Fall back per ad group if generation fails for a batch.

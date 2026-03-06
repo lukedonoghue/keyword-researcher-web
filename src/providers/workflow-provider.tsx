@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useContext, useReducer, type ReactNode, type Dispatch } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useState, type ReactNode, type Dispatch } from 'react';
 import type {
   SeedKeyword,
   SuppressedKeyword,
@@ -19,6 +19,7 @@ export type WizardStep =
   | 'geo'
   | 'strategy'
   | 'research'
+  | 'competitors'
   | 'enhance'
   | 'review'
   | 'campaign';
@@ -29,9 +30,10 @@ export const WIZARD_STEPS: { id: WizardStep; label: string; number: number }[] =
   { id: 'geo', label: 'Location', number: 3 },
   { id: 'strategy', label: 'Strategy', number: 4 },
   { id: 'research', label: 'Research', number: 5 },
-  { id: 'enhance', label: 'Enhance', number: 6 },
-  { id: 'review', label: 'Review', number: 7 },
-  { id: 'campaign', label: 'Campaign', number: 8 },
+  { id: 'competitors', label: 'Competitors', number: 6 },
+  { id: 'enhance', label: 'Enhance', number: 7 },
+  { id: 'review', label: 'Review', number: 8 },
+  { id: 'campaign', label: 'Campaign', number: 9 },
 ];
 
 export type WorkflowState = {
@@ -129,6 +131,130 @@ const initialState: WorkflowState = {
   error: null,
 };
 
+const WORKFLOW_STORAGE_KEY = 'keyword-researcher:workflow-state';
+const WORKFLOW_STORAGE_VERSION = 1;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function asArray<T>(value: unknown): T[] {
+  return Array.isArray(value) ? value as T[] : [];
+}
+
+function sanitizeWorkflowState(candidate: unknown): WorkflowState {
+  if (!isRecord(candidate)) {
+    return initialState;
+  }
+
+  const currentStep =
+    typeof candidate.currentStep === 'string' &&
+    WIZARD_STEPS.some((step) => step.id === candidate.currentStep)
+      ? candidate.currentStep as WizardStep
+      : initialState.currentStep;
+
+  const strategy = isRecord(candidate.strategy)
+    ? { ...initialStrategy, ...candidate.strategy }
+    : initialStrategy;
+
+  const messagingProfile = isRecord(candidate.messagingProfile)
+    ? {
+        ...initialState.messagingProfile,
+        ...candidate.messagingProfile,
+        features: asArray<string>(candidate.messagingProfile.features),
+        benefits: asArray<string>(candidate.messagingProfile.benefits),
+        differentiators: asArray<string>(candidate.messagingProfile.differentiators),
+        offers: asArray<string>(candidate.messagingProfile.offers),
+        callsToAction: asArray<string>(candidate.messagingProfile.callsToAction),
+        proofPoints: asArray<string>(candidate.messagingProfile.proofPoints),
+        tone: typeof candidate.messagingProfile.tone === 'string' ? candidate.messagingProfile.tone : '',
+      }
+    : initialState.messagingProfile;
+
+  return {
+    ...initialState,
+    ...candidate,
+    currentStep,
+    targetUrl: typeof candidate.targetUrl === 'string' ? candidate.targetUrl : initialState.targetUrl,
+    targetDomain: typeof candidate.targetDomain === 'string' ? candidate.targetDomain : initialState.targetDomain,
+    businessName: typeof candidate.businessName === 'string' ? candidate.businessName : initialState.businessName,
+    businessDescription: typeof candidate.businessDescription === 'string' ? candidate.businessDescription : initialState.businessDescription,
+    businessType: typeof candidate.businessType === 'string' ? candidate.businessType : initialState.businessType,
+    messagingProfile,
+    discoveredServices: asArray<WorkflowState['discoveredServices'][number]>(candidate.discoveredServices),
+    detectedServiceArea: isRecord(candidate.detectedServiceArea) ? candidate.detectedServiceArea as ServiceArea : null,
+    detectedCountryCode: typeof candidate.detectedCountryCode === 'string' ? candidate.detectedCountryCode : null,
+    contextTerms: asArray<string>(candidate.contextTerms),
+    selectedServices: asArray<string>(candidate.selectedServices),
+    selectedServiceContexts: asArray<ServiceContext>(candidate.selectedServiceContexts),
+    geoTargetId: typeof candidate.geoTargetId === 'string' ? candidate.geoTargetId : initialState.geoTargetId,
+    geoTargets: asArray<GeoLocationSuggestion>(candidate.geoTargets),
+    languageId: typeof candidate.languageId === 'string' ? candidate.languageId : initialState.languageId,
+    geoCountryCode: typeof candidate.geoCountryCode === 'string' ? candidate.geoCountryCode : initialState.geoCountryCode,
+    geoDisplayName: typeof candidate.geoDisplayName === 'string' ? candidate.geoDisplayName : initialState.geoDisplayName,
+    strategy,
+    seedKeywords: asArray<SeedKeyword>(candidate.seedKeywords),
+    selectedKeywords: asArray<SeedKeyword>(candidate.selectedKeywords),
+    suppressedKeywords: asArray<SuppressedKeyword>(candidate.suppressedKeywords),
+    enhancedKeywords: asArray<SeedKeyword>(candidate.enhancedKeywords),
+    enhancedSuppressed: asArray<SuppressedKeyword>(candidate.enhancedSuppressed),
+    campaigns: asArray<CampaignStructureV2>(candidate.campaigns),
+    manualSeedKeywords: asArray<string>(candidate.manualSeedKeywords),
+    competitorNames: asArray<string>(candidate.competitorNames),
+    reviewNegativeKeywords: asArray<string>(candidate.reviewNegativeKeywords),
+    reviewNegativeKeywordLists: asArray<NegativeKeywordList>(candidate.reviewNegativeKeywordLists),
+    negativeKeywords: asArray<NegativeKeyword>(candidate.negativeKeywords),
+    negativeKeywordLists: asArray<NegativeKeywordList>(candidate.negativeKeywordLists),
+    isProcessing: false,
+    error: null,
+  };
+}
+
+function loadPersistedWorkflowState(): WorkflowState {
+  if (typeof window === 'undefined') {
+    return initialState;
+  }
+
+  try {
+    const raw = window.localStorage.getItem(WORKFLOW_STORAGE_KEY);
+    if (!raw) return initialState;
+
+    const parsed = JSON.parse(raw) as { version?: number; state?: unknown };
+    if (!parsed || parsed.version !== WORKFLOW_STORAGE_VERSION) {
+      window.localStorage.removeItem(WORKFLOW_STORAGE_KEY);
+      return initialState;
+    }
+
+    return sanitizeWorkflowState(parsed.state);
+  } catch {
+    window.localStorage.removeItem(WORKFLOW_STORAGE_KEY);
+    return initialState;
+  }
+}
+
+function persistWorkflowState(state: WorkflowState) {
+  if (typeof window === 'undefined') return;
+
+  const snapshot: WorkflowState = {
+    ...state,
+    isProcessing: false,
+    error: null,
+  };
+
+  window.localStorage.setItem(
+    WORKFLOW_STORAGE_KEY,
+    JSON.stringify({
+      version: WORKFLOW_STORAGE_VERSION,
+      state: snapshot,
+    })
+  );
+}
+
+function clearPersistedWorkflowState() {
+  if (typeof window === 'undefined') return;
+  window.localStorage.removeItem(WORKFLOW_STORAGE_KEY);
+}
+
 function createDownstreamResearchReset() {
   return {
     seedKeywords: [],
@@ -146,6 +272,7 @@ function createDownstreamResearchReset() {
 }
 
 export type WorkflowAction =
+  | { type: 'HYDRATE'; state: WorkflowState }
   | { type: 'SET_STEP'; step: WizardStep }
   | { type: 'SET_TARGET'; url: string; domain: string }
   | { type: 'SET_DISCOVERY'; businessName: string; businessDescription: string; businessType: string; messagingProfile: WebsiteMessagingProfile; services: WorkflowState['discoveredServices']; serviceArea: ServiceArea | null; detectedCountryCode: string | null; contextTerms: string[] }
@@ -169,6 +296,8 @@ export type WorkflowAction =
 
 function workflowReducer(state: WorkflowState, action: WorkflowAction): WorkflowState {
   switch (action.type) {
+    case 'HYDRATE':
+      return action.state;
     case 'SET_STEP':
       return { ...state, currentStep: action.step, error: null };
     case 'SET_TARGET':
@@ -248,6 +377,8 @@ function workflowReducer(state: WorkflowState, action: WorkflowAction): Workflow
         ...state,
         selectedKeywords: action.selected,
         suppressedKeywords: action.suppressed,
+        enhancedKeywords: [],
+        enhancedSuppressed: [],
         campaigns: [],
         reviewNegativeKeywords: [],
         reviewNegativeKeywordLists: [],
@@ -302,12 +433,46 @@ function workflowReducer(state: WorkflowState, action: WorkflowAction): Workflow
   }
 }
 
-const WorkflowContext = createContext<{ state: WorkflowState; dispatch: Dispatch<WorkflowAction> } | null>(null);
+const WorkflowContext = createContext<{
+  state: WorkflowState;
+  dispatch: Dispatch<WorkflowAction>;
+  restart: () => void;
+  hydrated: boolean;
+} | null>(null);
 
 export function WorkflowProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(workflowReducer, initialState);
+  const [hydrated, setHydrated] = useState(false);
+
+  useEffect(() => {
+    dispatch({ type: 'HYDRATE', state: loadPersistedWorkflowState() });
+    const timer = window.setTimeout(() => {
+      setHydrated(true);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    persistWorkflowState(state);
+  }, [state, hydrated]);
+
+  const restart = useCallback(() => {
+    clearPersistedWorkflowState();
+    dispatch({ type: 'RESET' });
+  }, []);
+
+  const value = useMemo(
+    () => ({ state, dispatch, restart, hydrated }),
+    [state, dispatch, restart, hydrated]
+  );
+
+  if (!hydrated) {
+    return <div className="min-h-screen bg-background" />;
+  }
+
   return (
-    <WorkflowContext.Provider value={{ state, dispatch }}>
+    <WorkflowContext.Provider value={value}>
       {children}
     </WorkflowContext.Provider>
   );

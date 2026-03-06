@@ -180,6 +180,17 @@ export function tokenizeKeyword(value: string): string[] {
     .filter(Boolean);
 }
 
+export function isOwnerStyleQuery(text: string): boolean {
+  const normalized = normalizeKeywordText(text);
+  if (!normalized) return false;
+  if (/\bnear me\b/i.test(normalized)) return false;
+
+  const tokens = normalized.split(' ').filter(Boolean);
+  if (tokens.length < 2) return false;
+
+  return /^(my|our)\b/i.test(normalized);
+}
+
 function hasMatch(text: string, haystack: string[]): number {
   let score = 0;
   for (const phrase of haystack) {
@@ -262,6 +273,11 @@ export function classifyKeywordIntent(text: string): Pick<KeywordSignal, 'intent
   scores.informational += hasMatch(normalized, informationalIndicators) / 2;
   scores.navigational += hasMatch(normalized, navigationalIndicators) * 1.5;
 
+  if (isOwnerStyleQuery(normalized)) {
+    scores.informational += 3;
+    scores.navigational = Math.max(0, scores.navigational - 1);
+  }
+
   const commercialIntentPattern = /\b(agency|agencies|management|managed|consultant|consultants|company|companies|firm|specialist|specialists|expert|experts|provider|providers|service|services)\b/i;
   if (commercialIntentPattern.test(normalized)) {
     scores.commercial += 3;
@@ -338,9 +354,10 @@ export function analyzeKeywordSignals(text: string): KeywordSignal {
 
   const negativeReasons: string[] = [];
   const negativeScore = hasMatch(normalized, negativeIndicators);
-  const isNegativeCandidate = negativeScore > 0;
+  const ownerStyle = isOwnerStyleQuery(normalized);
+  const isNegativeCandidate = negativeScore > 0 || ownerStyle;
   if (isNegativeCandidate) {
-    negativeReasons.push('Contains navigational or non-service term pattern');
+    negativeReasons.push(ownerStyle ? 'Appears to be an owner/support-style query' : 'Contains navigational or non-service term pattern');
   }
 
   const tags: string[] = [];

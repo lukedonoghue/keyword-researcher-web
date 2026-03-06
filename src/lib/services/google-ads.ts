@@ -1,6 +1,7 @@
 import { GoogleAdsApi, enums } from 'google-ads-api';
 import type { CampaignStructureV2, NegativeKeyword, ResponsiveSearchAd } from '../types/index';
 import type { GeoLocationSuggestion } from '../types/geo';
+import type { GoogleAdsAccountNode } from '../types/google-ads';
 
 type KeywordMetric = {
   text: string;
@@ -10,6 +11,16 @@ type KeywordMetric = {
   cpcHigh: number;
   competition: string;
   competitionIndex: number;
+};
+
+type GoogleAdsAccountSummary = {
+  customerId: string;
+  descriptiveName: string;
+  isManager: boolean;
+  status?: string;
+  currencyCode?: string;
+  timeZone?: string;
+  hidden?: boolean;
 };
 
 type GoogleAdsCredentials = {
@@ -69,6 +80,44 @@ export class GoogleAdsService {
       return value as Record<string, unknown>;
     }
     return {};
+  }
+
+  private normalizeCustomerId(value: unknown): string {
+    return String(value || '').replace(/\D/g, '');
+  }
+
+  private toBoolean(value: unknown): boolean {
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'number') return value !== 0;
+    if (typeof value === 'string') {
+      const normalized = value.trim().toLowerCase();
+      return normalized === 'true' || normalized === '1';
+    }
+    return false;
+  }
+
+  private toOptionalString(value: unknown): string | undefined {
+    if (typeof value === 'string' && value.trim()) return value.trim();
+    if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+    return undefined;
+  }
+
+  private toAccountNode(summary: GoogleAdsAccountSummary, children: GoogleAdsAccountNode[] = []): GoogleAdsAccountNode {
+    return {
+      customerId: summary.customerId,
+      descriptiveName: summary.descriptiveName,
+      isManager: summary.isManager,
+      status: summary.status,
+      currencyCode: summary.currencyCode,
+      timeZone: summary.timeZone,
+      hidden: summary.hidden,
+      children: children.sort((left, right) => {
+        if (left.isManager !== right.isManager) {
+          return left.isManager ? -1 : 1;
+        }
+        return left.descriptiveName.localeCompare(right.descriptiveName);
+      }),
+    };
   }
 
   private toKeywordMatchType(matchType: string) {
@@ -138,45 +187,184 @@ export class GoogleAdsService {
     });
   }
 
-  async listAccessibleAccounts(): Promise<Array<{ customerId: string; descriptiveName: string }>> {
+  private async getAccessibleAccountIds(): Promise<string[]> {
     const response = await this.client.listAccessibleCustomers(this.refreshToken);
     const rawResourceNames = this.asRecord(response).resource_names;
     const resourceNames = Array.isArray(rawResourceNames)
       ? rawResourceNames.filter((name): name is string => typeof name === 'string')
       : [];
-    const accountIds = Array.from(
+    return Array.from(
       new Set(resourceNames.map((name) => name.replace(/\D/g, '')).filter(Boolean))
     );
+  }
+
+  private async fetchAccountSummary(customerId: string, loginCustomerId?: string): Promise<GoogleAdsAccountSummary> {
+    const customer = this.client.Customer({
+      customer_id: customerId,
+      refresh_token: this.refreshToken,
+      login_customer_id: loginCustomerId || this.loginCustomerId || undefined,
+    });
+    const rows = await customer.query(`
+      SELECT customer.id, customer.descriptive_name, customer.manager, customer.currency_code, customer.time_zone
+      FROM customer
+      LIMIT 1
+    `);
+    const firstRow = Array.isArray(rows) ? rows[0] : null;
+    const customerRow = this.asRecord(this.asRecord(firstRow).customer);
+    return {
+      customerId: this.normalizeCustomerId(customerRow.id) || customerId,
+      descriptiveName: this.toOptionalString(customerRow.descriptive_name) || `Account ${customerId}`,
+      isManager: this.toBoolean(customerRow.manager),
+      currencyCode: this.toOptionalString(customerRow.currency_code),
+      timeZone: this.toOptionalString(customerRow.time_zone),
+    };
+  }
+
+  private async listDirectChildAccounts(managerCustomerId: string, rootLoginCustomerId: string): Promise<GoogleAdsAccountSummary[]> {
+    const customer = this.client.Customer({
+      customer_id: managerCustomerId,
+      refresh_token: this.refreshToken,
+      login_customer_id: rootLoginCustomerId || this.loginCustomerId || undefined,
+    });
+    const rows = await customer.query(`
+      SELECT
+        customer_client.client_customer,
+        customer_client.id,
+        customer_client.descriptive_name,
+        customer_client.manager,
+        customer_client.hidden,
+        customer_client.status
+      FROM customer_client
+      WHERE customer_client.level = 1
+    `);
+
+    const directChildren = (Array.isArray(rows) ? rows : [])
+      .map((row): GoogleAdsAccountSummary | null => {
+        const accountRow = this.asRecord(this.asRecord(row).customer_client);
+        const childCustomerId =
+          this.normalizeCustomerId(accountRow.client_customer) ||
+          this.normalizeCustomerId(accountRow.id);
+        if (!childCustomerId) return null;
+
+        return {
+          customerId: childCustomerId,
+          descriptiveName: this.toOptionalString(accountRow.descriptive_name) || `Account ${childCustomerId}`,
+          isManager: this.toBoolean(accountRow.manager),
+          hidden: this.toBoolean(accountRow.hidden),
+          status: this.toOptionalString(accountRow.status),
+        } satisfies GoogleAdsAccountSummary;
+      });
+
+    return directChildren
+      .filter((account): account is GoogleAdsAccountSummary => account !== null)
+      .filter((account) => !account.hidden);
+  }
+
+  private async listAccessibleAccountSummaries(): Promise<GoogleAdsAccountSummary[]> {
+    const accountIds = await this.getAccessibleAccountIds();
 
     const accounts = await Promise.all(
       accountIds.map(async (customerId) => {
-        let descriptiveName = `Account ${customerId}`;
         try {
-          const customer = this.client.Customer({
-            customer_id: customerId,
-            refresh_token: this.refreshToken,
-            login_customer_id: this.loginCustomerId || undefined,
-          });
-          const rows = await customer.query(`
-            SELECT customer.descriptive_name, customer.id
-            FROM customer
-            LIMIT 1
-          `);
-          const firstRow = Array.isArray(rows) ? rows[0] : null;
-          const customerRow = this.asRecord(this.asRecord(firstRow).customer);
-          const maybeName = customerRow.descriptive_name;
-          if (typeof maybeName === 'string' && maybeName.trim()) {
-            descriptiveName = maybeName;
-          }
+          return await this.fetchAccountSummary(customerId);
         } catch {
-          // Keep fallback descriptive name if account details are unavailable.
+          return {
+            customerId,
+            descriptiveName: `Account ${customerId}`,
+            isManager: false,
+          } satisfies GoogleAdsAccountSummary;
         }
-
-        return { customerId, descriptiveName };
       })
     );
 
     return accounts;
+  }
+
+  private async buildManagerTree(
+    summary: GoogleAdsAccountSummary,
+    rootLoginCustomerId: string,
+    visited: Set<string>
+  ): Promise<GoogleAdsAccountNode> {
+    if (visited.has(summary.customerId)) {
+      return this.toAccountNode(summary);
+    }
+    visited.add(summary.customerId);
+
+    let children: GoogleAdsAccountNode[] = [];
+    try {
+      const directChildren = await this.listDirectChildAccounts(summary.customerId, rootLoginCustomerId);
+      children = await Promise.all(
+        directChildren.map(async (child) => (
+          child.isManager
+            ? this.buildManagerTree(child, rootLoginCustomerId, visited)
+            : this.toAccountNode(child)
+        ))
+      );
+    } catch {
+      children = [];
+    }
+
+    return this.toAccountNode(summary, children);
+  }
+
+  private collectDescendantIds(node: GoogleAdsAccountNode, descendants: Set<string>) {
+    for (const child of node.children) {
+      descendants.add(child.customerId);
+      this.collectDescendantIds(child, descendants);
+    }
+  }
+
+  private collectNodeIds(node: GoogleAdsAccountNode, ids: Set<string>) {
+    ids.add(node.customerId);
+    for (const child of node.children) {
+      this.collectNodeIds(child, ids);
+    }
+  }
+
+  async listAccessibleAccounts(): Promise<Array<{ customerId: string; descriptiveName: string }>> {
+    const accounts = await this.listAccessibleAccountSummaries();
+    return accounts
+      .map((account) => ({
+        customerId: account.customerId,
+        descriptiveName: account.descriptiveName,
+      }))
+      .sort((left, right) => left.descriptiveName.localeCompare(right.descriptiveName));
+  }
+
+  async listAccountHierarchy(): Promise<GoogleAdsAccountNode[]> {
+    const accessibleAccounts = await this.listAccessibleAccountSummaries();
+    const managerAccounts = accessibleAccounts.filter((account) => account.isManager);
+
+    if (managerAccounts.length === 0) {
+      return accessibleAccounts
+        .map((account) => this.toAccountNode(account))
+        .sort((left, right) => left.descriptiveName.localeCompare(right.descriptiveName));
+    }
+
+    const managerTrees = await Promise.all(
+      managerAccounts.map((manager) => this.buildManagerTree(manager, manager.customerId, new Set<string>()))
+    );
+    const descendantIds = new Set<string>();
+    for (const tree of managerTrees) {
+      this.collectDescendantIds(tree, descendantIds);
+    }
+
+    const rootTrees = managerTrees.filter((tree) => !descendantIds.has(tree.customerId));
+    const includedIds = new Set<string>();
+    for (const tree of rootTrees) {
+      this.collectNodeIds(tree, includedIds);
+    }
+
+    const standaloneAccounts = accessibleAccounts
+      .filter((account) => !includedIds.has(account.customerId))
+      .map((account) => this.toAccountNode(account));
+
+    return [...rootTrees, ...standaloneAccounts].sort((left, right) => {
+      if (left.isManager !== right.isManager) {
+        return left.isManager ? -1 : 1;
+      }
+      return left.descriptiveName.localeCompare(right.descriptiveName);
+    });
   }
 
   private inferCpcMicros(metrics: Record<string, unknown>, row: Record<string, unknown>): number {

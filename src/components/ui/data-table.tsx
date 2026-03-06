@@ -21,6 +21,15 @@ interface GroupInfo<TData> {
   adGroupPriority?: string;
   adGroup: string;
   rows: TData[];
+  campaignIndex?: number;
+  adGroupIndex?: number;
+  hasAdCopy?: boolean;
+}
+
+function getGroupKey<TData>(group: GroupInfo<TData>) {
+  const campaignPart = typeof group.campaignIndex === 'number' ? group.campaignIndex : group.campaign;
+  const adGroupPart = typeof group.adGroupIndex === 'number' ? group.adGroupIndex : group.adGroup;
+  return `${campaignPart}|||${adGroupPart}`;
 }
 
 interface DataTableProps<TData, TValue> {
@@ -32,6 +41,7 @@ interface DataTableProps<TData, TValue> {
   defaultPageSize?: number;
   toolbar?: React.ReactNode;
   hideCampaignLabelInGroups?: boolean;
+  renderGroupActions?: (group: GroupInfo<TData>) => React.ReactNode;
 }
 
 export function DataTable<TData, TValue>({
@@ -43,6 +53,7 @@ export function DataTable<TData, TValue>({
   defaultPageSize = 50,
   toolbar,
   hideCampaignLabelInGroups = false,
+  renderGroupActions,
 }: DataTableProps<TData, TValue>) {
   const [sorting, setSorting] = React.useState<SortingState>(defaultSorting);
   const [columnVisibility, setColumnVisibility] = React.useState<VisibilityState>(defaultColumnVisibility);
@@ -55,7 +66,7 @@ export function DataTable<TData, TValue>({
     if (!groupedData || groupedData.length === 0) return;
     setExpandedGroups((prev) => {
       if (prev.size > 0) return prev;
-      return new Set(groupedData.map((g) => `${g.campaign}|||${g.adGroup}`));
+      return new Set(groupedData.map((group) => getGroupKey(group)));
     });
   }, [groupedData]);
 
@@ -177,7 +188,7 @@ export function DataTable<TData, TValue>({
               // Grouped rendering
               pagedGroups.length > 0 ? (
                 pagedGroups.map((group) => {
-                  const key = `${group.campaign}|||${group.adGroup}`;
+                  const key = getGroupKey(group);
                   const isExpanded = expandedGroups.has(key);
                   const campaignShort = group.campaign.replace('Service - ', '');
                   return (
@@ -215,6 +226,11 @@ export function DataTable<TData, TValue>({
                               }`}>
                                 {group.priority.charAt(0).toUpperCase() + group.priority.slice(1)}
                               </span>
+                            )}
+                            {renderGroupActions && (
+                              <div className="ml-auto" onClick={(event) => event.stopPropagation()}>
+                                {renderGroupActions(group)}
+                              </div>
                             )}
                           </div>
                         </TableCell>

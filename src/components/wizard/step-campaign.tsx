@@ -26,6 +26,7 @@ import { BudgetPlanner } from './budget-planner';
 import { CampaignDataTable } from '@/components/wizard/campaign-data-table';
 import { GeoLocationPicker } from './geo-location-picker';
 import { PhaseRow } from './phase-row';
+import { GoogleAdPreview } from '@/components/ui/google-ad-preview';
 import { GEO_CONSTANTS } from '@/lib/data/geoConstants';
 import type { GeoLocationSuggestion } from '@/lib/types/geo';
 import type { CampaignMatchTypeStrategy, CampaignStructureV2, AdGroupPriority, ResponsiveSearchAd } from '@/lib/types/index';
@@ -126,14 +127,7 @@ type RsaEditorDraft = {
   path2: string;
 };
 
-type AdGroupRsaRecord = {
-  campaignIndex: number;
-  adGroupIndex: number;
-  campaignName: string;
-  adGroupName: string;
-  landingPage?: string;
-  rsa: ResponsiveSearchAd;
-};
+
 
 function createRsaDraft(rsa?: ResponsiveSearchAd): RsaEditorDraft {
   return {
@@ -188,7 +182,7 @@ export function StepCampaign() {
   const [editingName, setEditingName] = useState('');
   const [showNegatives, setShowNegatives] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const [viewMode, setViewMode] = useState<'table' | 'tree'>('table');
+  const [viewMode, setViewMode] = useState<'table' | 'preview'>('table');
   const [showAdditional, setShowAdditional] = useState(false);
   const [geoDialogOpen, setGeoDialogOpen] = useState(false);
   const [rerunPhase, setRerunPhase] = useState<string | null>(null);
@@ -197,6 +191,9 @@ export function StepCampaign() {
   const [editingRsaTarget, setEditingRsaTarget] = useState<{ campaignIndex: number; adGroupIndex: number } | null>(null);
   const [rsaDraft, setRsaDraft] = useState<RsaEditorDraft>(() => createRsaDraft());
   const [rsaDraftErrors, setRsaDraftErrors] = useState<string[]>([]);
+  const [pendingPreviewTarget, setPendingPreviewTarget] = useState<{ campaignIndex: number; adGroupIndex: number } | null>(null);
+  const [highlightedAdGroupKey, setHighlightedAdGroupKey] = useState<string | null>(null);
+  const adGroupPreviewRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   const keywordsForBudget = useMemo(
     () => (state.enhancedKeywords.length > 0 ? state.enhancedKeywords : state.selectedKeywords),
@@ -308,25 +305,7 @@ export function StepCampaign() {
     return { ready, previews };
   }, [state.campaigns]);
 
-  const rsaRecords = useMemo<AdGroupRsaRecord[]>(() => {
-    const records: AdGroupRsaRecord[] = [];
 
-    state.campaigns.forEach((campaign, campaignIndex) => {
-      campaign.adGroups.forEach((adGroup, adGroupIndex) => {
-        if (!adGroup.responsiveSearchAd) return;
-        records.push({
-          campaignIndex,
-          adGroupIndex,
-          campaignName: campaign.campaignName,
-          adGroupName: adGroup.name,
-          landingPage: campaign.landingPage,
-          rsa: adGroup.responsiveSearchAd,
-        });
-      });
-    });
-
-    return records;
-  }, [state.campaigns]);
 
   // Split ad groups by priority for display
   const adGroupPriorityCounts = useMemo(() => {
@@ -344,11 +323,60 @@ export function StepCampaign() {
   // For tree view: split each campaign's ad groups into main vs additional
   const campaignsWithSplit = useMemo(() => {
     return state.campaigns.map((campaign) => {
-      const mainGroups = campaign.adGroups.filter((ag) => ag.priority !== 'additional');
-      const additionalGroups = campaign.adGroups.filter((ag) => ag.priority === 'additional');
+      const indexedAdGroups = campaign.adGroups.map((adGroup, index) => ({ adGroup, index }));
+      const mainGroups = indexedAdGroups.filter(({ adGroup }) => adGroup.priority !== 'additional');
+      const additionalGroups = indexedAdGroups.filter(({ adGroup }) => adGroup.priority === 'additional');
       return { campaign, mainGroups, additionalGroups };
     });
   }, [state.campaigns]);
+
+  const getAdGroupPreviewKey = useCallback(
+    (campaignIndex: number, adGroupIndex: number) => `${campaignIndex}:${adGroupIndex}`,
+    []
+  );
+
+  const handleViewAdGroup = useCallback((target: { campaignIndex: number; adGroupIndex: number }) => {
+    const adGroup = state.campaigns[target.campaignIndex]?.adGroups[target.adGroupIndex];
+    if (!adGroup) return;
+
+    if (adGroup.priority === 'additional') {
+      setShowAdditional(true);
+    }
+
+    setViewMode('preview');
+    setPendingPreviewTarget(target);
+    setHighlightedAdGroupKey(getAdGroupPreviewKey(target.campaignIndex, target.adGroupIndex));
+  }, [getAdGroupPreviewKey, state.campaigns]);
+
+  useEffect(() => {
+    if (viewMode !== 'preview' || !pendingPreviewTarget) return;
+
+    const previewKey = getAdGroupPreviewKey(
+      pendingPreviewTarget.campaignIndex,
+      pendingPreviewTarget.adGroupIndex
+    );
+
+    const timer = window.setTimeout(() => {
+      const targetElement = adGroupPreviewRefs.current[previewKey];
+      if (targetElement) {
+        targetElement.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        targetElement.focus({ preventScroll: true });
+      }
+      setPendingPreviewTarget(null);
+    }, 120);
+
+    return () => window.clearTimeout(timer);
+  }, [getAdGroupPreviewKey, pendingPreviewTarget, showAdditional, viewMode]);
+
+  useEffect(() => {
+    if (!highlightedAdGroupKey) return;
+
+    const timer = window.setTimeout(() => {
+      setHighlightedAdGroupKey((current) => (current === highlightedAdGroupKey ? null : current));
+    }, 2200);
+
+    return () => window.clearTimeout(timer);
+  }, [highlightedAdGroupKey]);
 
   const handleExportGoogleAds = useCallback(async () => {
     const res = await fetch('/api/export-csv', {
@@ -912,7 +940,7 @@ export function StepCampaign() {
 
       {/* View Toggle */}
       {state.campaigns.length > 0 && (
-        <div className="flex items-center gap-1">
+        <div className="flex flex-wrap items-center gap-2">
           <Button
             variant={viewMode === 'table' ? 'default' : 'outline'}
             size="sm"
@@ -923,34 +951,45 @@ export function StepCampaign() {
             Table
           </Button>
           <Button
-            variant={viewMode === 'tree' ? 'default' : 'outline'}
+            variant={viewMode === 'preview' ? 'default' : 'outline'}
             size="sm"
             className="h-7 text-xs"
-            onClick={() => setViewMode('tree')}
+            onClick={() => setViewMode('preview')}
           >
             <List className="h-3.5 w-3.5 mr-1" />
-            Tree
+            Ad Preview
           </Button>
+          <p className="text-[11px] text-muted-foreground">
+            Use the table&apos;s <span className="font-medium text-foreground/80">View Ad</span> shortcut to jump straight into ad copy preview.
+          </p>
         </div>
       )}
 
       {/* Table View */}
       {viewMode === 'table' && state.campaigns.length > 0 && (
-        <CampaignDataTable campaigns={state.campaigns} />
+        <CampaignDataTable campaigns={state.campaigns} onViewAdGroup={handleViewAdGroup} />
       )}
 
-      {/* Tree View (original accordions) */}
-      {viewMode === 'tree' && campaignsWithSplit.map(({ campaign, mainGroups, additionalGroups }, ci) => {
+      {/* Ad Preview View */}
+      {viewMode === 'preview' && campaignsWithSplit.map(({ campaign, mainGroups, additionalGroups }, ci) => {
         const campaignKwCount = campaignKwCounts[ci];
         const campaignAvgCpc = getCampaignAvgCpc(campaign, campaignKwCount);
         const campaignTotalVolume = getCampaignTotalVolume(campaign);
         const campEstLow = campaignAvgCpc * campaignTotalVolume * 0.02;
         const campEstHigh = campaignAvgCpc * campaignTotalVolume * 0.05;
 
-        const renderAdGroup = (adGroup: typeof campaign.adGroups[number], agi: number) => {
+        const renderAdGroup = ({
+          adGroup,
+          index: adGroupIndex,
+        }: {
+          adGroup: typeof campaign.adGroups[number];
+          index: number;
+        }) => {
           const agKwCount = adGroup.subThemes.reduce((s, st) => s + st.keywords.length, 0);
+          const previewKey = getAdGroupPreviewKey(ci, adGroupIndex);
+          const isHighlighted = highlightedAdGroupKey === previewKey;
           return (
-            <AccordionItem key={agi} value={`ag-${ci}-${agi}`}>
+            <AccordionItem key={adGroupIndex} value={`ag-${ci}-${adGroupIndex}`}>
               <AccordionTrigger className="text-xs py-2 hover:no-underline">
                 <div className="flex items-center gap-2">
                   <span className="font-medium">Ad Group: {adGroup.name}</span>
@@ -965,47 +1004,90 @@ export function StepCampaign() {
                 </div>
               </AccordionTrigger>
               <AccordionContent>
-                <div className="ml-2 space-y-2">
-                  {adGroup.subThemes.map((subTheme, sti) => (
-                    <Accordion key={sti} type="multiple" className="w-full">
-                      <AccordionItem value={`st-${ci}-${agi}-${sti}`} className="border-l-2 border-muted pl-3">
-                        <AccordionTrigger className="text-[11px] py-1.5 hover:no-underline">
-                          <div className="flex items-center gap-2">
-                            <span>{subTheme.name}</span>
-                            <Badge variant="outline" className="text-[9px] px-1 py-0">
-                              {subTheme.keywords.length} kw
-                            </Badge>
-                          </div>
-                        </AccordionTrigger>
-                        <AccordionContent>
-                          <Table>
-                            <TableHeader>
-                              <TableRow>
-                                <TableHead className="text-[10px]">Keyword</TableHead>
-                                <TableHead className="text-[10px]">Match</TableHead>
-                                <TableHead className="text-[10px] text-right">Vol</TableHead>
-                                <TableHead className="text-[10px] text-right">CPC</TableHead>
-                              </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                              {subTheme.keywords.map((kw, ki) => (
-                                <TableRow key={ki} className="h-7">
-                                  <TableCell className="text-[11px] font-mono py-0.5">
-                                    {kw.matchType === 'Exact' ? `[${kw.keyword}]` : kw.matchType === 'Phrase' ? `"${kw.keyword}"` : kw.keyword}
-                                  </TableCell>
-                                  <TableCell className="text-[11px] py-0.5">{kw.matchType}</TableCell>
-                                  <TableCell className="text-[11px] text-right py-0.5 tabular-nums">{kw.volume.toLocaleString()}</TableCell>
-                                  <TableCell className="text-[11px] text-right py-0.5 tabular-nums">
-                                    {kw.cpc > 0 ? `$${kw.cpc.toFixed(2)}` : <span className="text-[10px] text-muted-foreground italic">Low data</span>}
-                                  </TableCell>
+                <div
+                  id={`ad-preview-${ci}-${adGroupIndex}`}
+                  ref={(element) => {
+                    adGroupPreviewRefs.current[previewKey] = element;
+                  }}
+                  tabIndex={-1}
+                  className={`grid grid-cols-1 gap-6 rounded-md px-2 py-1 outline-none transition-all lg:grid-cols-[1fr_350px] ${
+                    isHighlighted ? 'bg-brand-accent/5 ring-2 ring-brand-accent/60' : ''
+                  }`}
+                >
+                  <div className="space-y-2">
+                    {adGroup.subThemes.map((subTheme, sti) => (
+                      <Accordion key={sti} type="multiple" className="w-full">
+                        <AccordionItem value={`st-${ci}-${adGroupIndex}-${sti}`} className="border-l-2 border-muted pl-3">
+                          <AccordionTrigger className="text-[11px] py-1.5 hover:no-underline">
+                            <div className="flex items-center gap-2">
+                              <span>{subTheme.name}</span>
+                              <Badge variant="outline" className="text-[9px] px-1 py-0">
+                                {subTheme.keywords.length} kw
+                              </Badge>
+                            </div>
+                          </AccordionTrigger>
+                          <AccordionContent>
+                            <Table>
+                              <TableHeader>
+                                <TableRow>
+                                  <TableHead className="text-[10px]">Keyword</TableHead>
+                                  <TableHead className="text-[10px]">Match</TableHead>
+                                  <TableHead className="text-[10px] text-right">Vol</TableHead>
+                                  <TableHead className="text-[10px] text-right">CPC</TableHead>
                                 </TableRow>
-                              ))}
-                            </TableBody>
-                          </Table>
-                        </AccordionContent>
-                      </AccordionItem>
-                    </Accordion>
-                  ))}
+                              </TableHeader>
+                              <TableBody>
+                                {subTheme.keywords.map((kw, ki) => (
+                                  <TableRow key={ki} className="h-7">
+                                    <TableCell className="text-[11px] font-mono py-0.5">
+                                      {kw.matchType === 'Exact' ? `[${kw.keyword}]` : kw.matchType === 'Phrase' ? `"${kw.keyword}"` : kw.keyword}
+                                    </TableCell>
+                                    <TableCell className="text-[11px] py-0.5">{kw.matchType}</TableCell>
+                                    <TableCell className="text-[11px] text-right py-0.5 tabular-nums">{kw.volume.toLocaleString()}</TableCell>
+                                    <TableCell className="text-[11px] text-right py-0.5 tabular-nums">
+                                      {kw.cpc > 0 ? `$${kw.cpc.toFixed(2)}` : <span className="text-[10px] text-muted-foreground italic">Low data</span>}
+                                    </TableCell>
+                                  </TableRow>
+                                ))}
+                              </TableBody>
+                            </Table>
+                          </AccordionContent>
+                        </AccordionItem>
+                      </Accordion>
+                    ))}
+                  </div>
+                  <div className="flex flex-col gap-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-medium text-muted-foreground">
+                        {adGroup.responsiveSearchAd ? 'Responsive Search Ad Preview' : 'Responsive Search Ad'}
+                      </span>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-7 text-xs"
+                        onClick={() => openRsaEditor(ci, adGroupIndex)}
+                      >
+                        <Pencil className="h-3 w-3 mr-1.5" />
+                        {adGroup.responsiveSearchAd ? 'Edit Ad' : 'Create Ad'}
+                      </Button>
+                    </div>
+                    {adGroup.responsiveSearchAd ? (
+                      <GoogleAdPreview
+                        domain={campaign.landingPage || state.targetUrl || state.targetDomain || 'example.com'}
+                        path1={adGroup.responsiveSearchAd.path1}
+                        path2={adGroup.responsiveSearchAd.path2}
+                        headlines={adGroup.responsiveSearchAd.headlines}
+                        descriptions={adGroup.responsiveSearchAd.descriptions}
+                      />
+                    ) : (
+                      <div className="rounded-xl border border-dashed border-border/70 bg-muted/20 px-4 py-6 text-center">
+                        <p className="text-sm font-medium">No responsive search ad generated yet</p>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          Create or paste ad copy for this ad group before exporting or importing to Google Ads.
+                        </p>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </AccordionContent>
             </AccordionItem>
@@ -1104,8 +1186,12 @@ export function StepCampaign() {
             </CardHeader>
             <CardContent className="pt-0">
               {/* Core + Recommended ad groups (expanded) */}
-              <Accordion type="multiple" defaultValue={mainGroups.map((_, agi) => `ag-${ci}-${agi}`)} className="w-full">
-                {mainGroups.map((adGroup, agi) => renderAdGroup(adGroup, agi))}
+              <Accordion
+                type="multiple"
+                defaultValue={mainGroups.map(({ index }) => `ag-${ci}-${index}`)}
+                className="w-full"
+              >
+                {mainGroups.map(renderAdGroup)}
               </Accordion>
 
               {/* Additional Opportunities (collapsed) */}
@@ -1125,7 +1211,7 @@ export function StepCampaign() {
                   {showAdditional && (
                     <div className="border-t px-2">
                       <Accordion type="multiple" className="w-full">
-                        {additionalGroups.map((adGroup, agi) => renderAdGroup(adGroup, mainGroups.length + agi))}
+                        {additionalGroups.map(renderAdGroup)}
                       </Accordion>
                     </div>
                   )}
@@ -1135,76 +1221,6 @@ export function StepCampaign() {
           </Card>
         );
       })}
-
-      {rsaRecords.length > 0 && (
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm">Responsive Search Ads</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <p className="text-xs text-muted-foreground">
-              Each ad group has one RSA. Any edits you make here are saved into the campaign state and will be used for both CSV export and direct Google Ads import.
-            </p>
-            <div className="space-y-3">
-              {rsaRecords.map((record) => (
-                <div
-                  key={`${record.campaignName}|||${record.adGroupName}`}
-                  className="grid gap-3 rounded-lg border border-border/70 p-3 lg:grid-cols-[220px_minmax(0,1fr)_auto]"
-                >
-                  <div className="min-w-0">
-                    {state.campaigns.length > 1 && (
-                      <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                        {record.campaignName.replace('Service - ', '')}
-                      </p>
-                    )}
-                    <p className="text-sm font-medium">{record.adGroupName}</p>
-                    <div className="mt-1 flex flex-wrap gap-1">
-                      <Badge variant="outline" className="text-[10px]">
-                        {record.rsa.source === 'manual'
-                          ? 'Edited'
-                          : record.rsa.source === 'ai'
-                            ? 'AI'
-                            : 'Fallback'}
-                      </Badge>
-                      {record.rsa.model && (
-                        <Badge variant="secondary" className="text-[10px]">
-                          {record.rsa.model.includes('flash') ? 'Flash' : 'AI Model'}
-                        </Badge>
-                      )}
-                    </div>
-                  </div>
-                  <div className="min-w-0 space-y-1">
-                    <div>
-                      <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Headlines</p>
-                      <p className="text-xs leading-relaxed">{record.rsa.headlines.join(' • ')}</p>
-                    </div>
-                    <div>
-                      <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Descriptions</p>
-                      <p className="text-xs leading-relaxed text-muted-foreground">{record.rsa.descriptions.join(' • ')}</p>
-                    </div>
-                    {(record.rsa.path1 || record.rsa.path2) && (
-                      <p className="text-[10px] text-muted-foreground">
-                        Paths: {[record.rsa.path1, record.rsa.path2].filter(Boolean).join(' / ')}
-                      </p>
-                    )}
-                  </div>
-                  <div className="flex items-start justify-end">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-8"
-                      onClick={() => openRsaEditor(record.campaignIndex, record.adGroupIndex)}
-                    >
-                      <Pencil className="mr-1.5 h-3.5 w-3.5" />
-                      Edit Copy
-                    </Button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      )}
 
       {/* Negative Keywords */}
       {state.negativeKeywords.length > 0 && (
@@ -1466,91 +1482,137 @@ export function StepCampaign() {
           }
         }}
       >
-        <DialogContent className="max-w-3xl">
-          <DialogHeader>
+        <DialogContent className="max-w-5xl h-[85vh] flex flex-col p-0 gap-0 overflow-hidden">
+          <DialogHeader className="p-6 pb-4 shrink-0 border-b">
             <DialogTitle>Edit Responsive Search Ad</DialogTitle>
             <DialogDescription>
               Update headlines, descriptions, and paths for this ad group. Saved changes flow directly into CSV export and Google Ads import.
             </DialogDescription>
           </DialogHeader>
-          {editingRsaTarget && (
-            <div className="space-y-4 py-2">
-              <div className="rounded-md border border-border/70 bg-muted/20 px-3 py-2">
-                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Target</p>
-                <p className="text-sm font-medium">
-                  {state.campaigns[editingRsaTarget.campaignIndex]?.campaignName.replace('Service - ', '')}
-                  {' / '}
-                  {state.campaigns[editingRsaTarget.campaignIndex]?.adGroups[editingRsaTarget.adGroupIndex]?.name}
-                </p>
-              </div>
+          
+          <div className="flex-1 overflow-hidden flex flex-col lg:flex-row">
+            {editingRsaTarget && (
+              <>
+                {/* Form Side */}
+                <div className="flex-1 overflow-y-auto p-6 space-y-6">
+                  <div className="rounded-md border border-border/70 bg-muted/20 px-3 py-2">
+                    <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Target</p>
+                    <p className="text-sm font-medium">
+                      {state.campaigns[editingRsaTarget.campaignIndex]?.campaignName.replace('Service - ', '')}
+                      {' / '}
+                      {state.campaigns[editingRsaTarget.campaignIndex]?.adGroups[editingRsaTarget.adGroupIndex]?.name}
+                    </p>
+                  </div>
 
-              <div className="grid gap-4 lg:grid-cols-2">
-                <div className="space-y-2">
-                  <Label className="text-xs">Headlines</Label>
-                  {rsaDraft.headlines.map((headline, index) => (
-                    <Input
-                      key={`headline-${index}`}
-                      value={headline}
-                      onChange={(e) => setRsaDraft((prev) => {
-                        const headlines = [...prev.headlines];
-                        headlines[index] = e.target.value;
-                        return { ...prev, headlines };
-                      })}
-                      placeholder={`Headline ${index + 1}`}
-                      className="h-8 text-xs"
-                    />
-                  ))}
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Descriptions</Label>
-                  {rsaDraft.descriptions.map((description, index) => (
-                    <Textarea
-                      key={`description-${index}`}
-                      value={description}
-                      onChange={(e) => setRsaDraft((prev) => {
-                        const descriptions = [...prev.descriptions];
-                        descriptions[index] = e.target.value;
-                        return { ...prev, descriptions };
-                      })}
-                      placeholder={`Description ${index + 1}`}
-                      className="min-h-[72px] text-xs"
-                    />
-                  ))}
                   <div className="grid grid-cols-2 gap-3">
                     <div className="space-y-1">
                       <Label className="text-xs">Path 1</Label>
-                      <Input
-                        value={rsaDraft.path1}
-                        onChange={(e) => setRsaDraft((prev) => ({ ...prev, path1: e.target.value }))}
-                        className="h-8 text-xs"
-                        placeholder="service"
-                      />
+                      <div className="relative">
+                        <Input
+                          value={rsaDraft.path1}
+                          onChange={(e) => setRsaDraft((prev) => ({ ...prev, path1: e.target.value }))}
+                          className={`h-8 text-xs pr-12 ${rsaDraft.path1.length > 15 ? 'border-destructive focus-visible:ring-destructive' : ''}`}
+                          placeholder="service"
+                        />
+                        <span className={`absolute right-2 top-2 text-[10px] ${rsaDraft.path1.length > 15 ? 'text-destructive font-medium' : rsaDraft.path1.length > 12 ? 'text-orange-500 font-medium' : 'text-muted-foreground'}`}>
+                          {rsaDraft.path1.length}/15
+                        </span>
+                      </div>
                     </div>
                     <div className="space-y-1">
                       <Label className="text-xs">Path 2</Label>
-                      <Input
-                        value={rsaDraft.path2}
-                        onChange={(e) => setRsaDraft((prev) => ({ ...prev, path2: e.target.value }))}
-                        className="h-8 text-xs"
-                        placeholder="quote"
-                      />
+                      <div className="relative">
+                        <Input
+                          value={rsaDraft.path2}
+                          onChange={(e) => setRsaDraft((prev) => ({ ...prev, path2: e.target.value }))}
+                          className={`h-8 text-xs pr-12 ${rsaDraft.path2.length > 15 ? 'border-destructive focus-visible:ring-destructive' : ''}`}
+                          placeholder="quote"
+                        />
+                        <span className={`absolute right-2 top-2 text-[10px] ${rsaDraft.path2.length > 15 ? 'text-destructive font-medium' : rsaDraft.path2.length > 12 ? 'text-orange-500 font-medium' : 'text-muted-foreground'}`}>
+                          {rsaDraft.path2.length}/15
+                        </span>
+                      </div>
                     </div>
                   </div>
-                </div>
-              </div>
 
-              {rsaDraftErrors.length > 0 && (
-                <div className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2">
-                  <ul className="space-y-1 text-xs text-destructive">
-                    {rsaDraftErrors.map((errorText) => (
-                      <li key={errorText}>{errorText}</li>
-                    ))}
-                  </ul>
+                  <div className="space-y-3">
+                    <Label className="text-xs font-semibold">Headlines</Label>
+                    <div className="space-y-2">
+                      {rsaDraft.headlines.map((headline, index) => (
+                        <div key={`headline-${index}`} className="relative">
+                          <Input
+                            value={headline}
+                            onChange={(e) => setRsaDraft((prev) => {
+                              const headlines = [...prev.headlines];
+                              headlines[index] = e.target.value;
+                              return { ...prev, headlines };
+                            })}
+                            placeholder={`Headline ${index + 1}`}
+                            className={`h-8 text-xs pr-12 ${headline.length > 30 ? 'border-destructive focus-visible:ring-destructive' : ''}`}
+                          />
+                          <span className={`absolute right-2 top-2 text-[10px] ${headline.length > 30 ? 'text-destructive font-medium' : headline.length > 25 ? 'text-orange-500 font-medium' : 'text-muted-foreground'}`}>
+                            {headline.length}/30
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  
+                  <div className="space-y-3">
+                    <Label className="text-xs font-semibold">Descriptions</Label>
+                    <div className="space-y-2">
+                      {rsaDraft.descriptions.map((description, index) => (
+                        <div key={`description-${index}`} className="relative">
+                          <Textarea
+                            value={description}
+                            onChange={(e) => setRsaDraft((prev) => {
+                              const descriptions = [...prev.descriptions];
+                              descriptions[index] = e.target.value;
+                              return { ...prev, descriptions };
+                            })}
+                            placeholder={`Description ${index + 1}`}
+                            className={`min-h-[72px] text-xs pr-12 pb-5 ${description.length > 90 ? 'border-destructive focus-visible:ring-destructive' : ''}`}
+                          />
+                          <span className={`absolute right-2 bottom-2 text-[10px] ${description.length > 90 ? 'text-destructive font-medium' : description.length > 80 ? 'text-orange-500 font-medium' : 'text-muted-foreground'}`}>
+                            {description.length}/90
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {rsaDraftErrors.length > 0 && (
+                    <div className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2">
+                      <ul className="space-y-1 text-xs text-destructive">
+                        {rsaDraftErrors.map((errorText) => (
+                          <li key={errorText}>{errorText}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
-          )}
-          <DialogFooter>
+
+                {/* Preview Side */}
+                <div className="w-full lg:w-[400px] bg-muted/20 border-l p-6 shrink-0 flex flex-col sticky top-0 h-full">
+                  <div className="sticky top-0 space-y-4">
+                    <div className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Ad Preview</div>
+                    <GoogleAdPreview
+                      domain={state.campaigns[editingRsaTarget.campaignIndex]?.landingPage || state.targetUrl || state.targetDomain || 'example.com'}
+                      path1={rsaDraft.path1}
+                      path2={rsaDraft.path2}
+                      headlines={rsaDraft.headlines}
+                      descriptions={rsaDraft.descriptions}
+                    />
+                    <p className="text-[10px] text-muted-foreground text-center mt-4">
+                      Preview cycles through valid headlines and descriptions to show possible combinations.
+                    </p>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+          
+          <DialogFooter className="p-4 border-t shrink-0 bg-background">
             <Button
               variant="outline"
               size="sm"

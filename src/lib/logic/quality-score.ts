@@ -1,4 +1,5 @@
 import type { SeedKeyword, KeywordIntent } from '../types/index';
+import { isOwnerStyleQuery } from './keyword-signals';
 
 export function getKeywordQualityScore(keyword: SeedKeyword): { score: number; rating: string } {
   const volumeFactor = Math.min(Math.log10(keyword.volume + 1) / Math.log10(15000), 1);
@@ -18,9 +19,10 @@ export function getKeywordQualityScore(keyword: SeedKeyword): { score: number; r
   };
   const intent = keyword.intent ?? 'unknown';
   const intentFactor = intentScoreByIntent[intent] ?? 0.35;
+  const ownerStylePenalty = isOwnerStyleQuery(keyword.text) ? 18 : 0;
 
   // Weights: Intent 35%, CPC efficiency 30%, Volume 20%, Competition opportunity 10%, Rank 5%
-  const score = Math.round(intentFactor * 35 + cpcFactor * 30 + volumeFactor * 20 + competitionFactor * 10 + rankFactor * 5);
+  const score = Math.round(intentFactor * 35 + cpcFactor * 30 + volumeFactor * 20 + competitionFactor * 10 + rankFactor * 5 - ownerStylePenalty);
 
   let rating = 'D';
   if (score >= 86) rating = 'A+';

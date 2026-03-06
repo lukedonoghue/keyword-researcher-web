@@ -26,5 +26,6 @@ export function getGoogleAdsCredentials(session: SessionData) {
     clientSecret: process.env.GOOGLE_ADS_ORIG_CLIENT_SECRET || process.env.GOOGLE_ADS_CLIENT_SECRET!,
     refreshToken: session.refreshToken!,
     customerId: session.customerId!,
+    loginCustomerId: session.loginCustomerId || process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID,
   };
 }

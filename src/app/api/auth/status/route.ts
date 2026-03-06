@@ -8,5 +8,7 @@ export async function GET() {
     authenticated: Boolean(session.refreshToken),
     hasCustomerId: Boolean(session.customerId),
     customerId: session.customerId || null,
+    loginCustomerId: session.loginCustomerId || null,
+    selectedAccountName: session.selectedAccountName || null,
   });
 }

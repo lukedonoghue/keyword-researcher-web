@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import { type ColumnDef } from '@tanstack/react-table';
-import { ArrowUpDown, SlidersHorizontal, Search } from 'lucide-react';
+import { ArrowRight, ArrowUpDown, SlidersHorizontal, Search } from 'lucide-react';
 import { DataTable } from '@/components/ui/data-table';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -27,9 +27,12 @@ import type { CampaignStructureV2, KeywordIntent, AdGroupPriority } from '@/lib/
 
 type CampaignKeywordRow = {
   campaign: string;
+  campaignIndex: number;
   priority: 'high' | 'medium' | 'low' | '';
   adGroupPriority: AdGroupPriority | '';
   adGroup: string;
+  adGroupIndex: number;
+  hasAdCopy: boolean;
   keyword: string;
   matchType: string;
   volume: number;
@@ -97,15 +100,18 @@ const intentLabels: Record<string, string> = {
 
 function flattenCampaigns(campaigns: CampaignStructureV2[]): CampaignKeywordRow[] {
   const rows: CampaignKeywordRow[] = [];
-  for (const campaign of campaigns) {
-    for (const ag of campaign.adGroups) {
+  for (const [campaignIndex, campaign] of campaigns.entries()) {
+    for (const [adGroupIndex, ag] of campaign.adGroups.entries()) {
       for (const st of ag.subThemes) {
         for (const kw of st.keywords) {
           rows.push({
             campaign: campaign.campaignName,
+            campaignIndex,
             priority: campaign.priority || '',
             adGroupPriority: ag.priority || '',
             adGroup: ag.name,
+            adGroupIndex,
+            hasAdCopy: Boolean(ag.responsiveSearchAd),
             keyword: kw.keyword,
             matchType: kw.matchType,
             volume: kw.volume,
@@ -353,7 +359,13 @@ const defaultColumnVisibility: Record<string, boolean> = {
   recommendedBidStrategy: false,
 };
 
-export function CampaignDataTable({ campaigns }: { campaigns: CampaignStructureV2[] }) {
+export function CampaignDataTable({
+  campaigns,
+  onViewAdGroup,
+}: {
+  campaigns: CampaignStructureV2[];
+  onViewAdGroup?: (target: { campaignIndex: number; adGroupIndex: number }) => void;
+}) {
   const rows = useMemo(() => flattenCampaigns(campaigns), [campaigns]);
 
   const campaignNames = useMemo(
@@ -394,18 +406,30 @@ export function CampaignDataTable({ campaigns }: { campaigns: CampaignStructureV
 
   // Group rows by campaign > ad group for display
   const groupedData = useMemo(() => {
-    const groups: { campaign: string; priority: string; adGroupPriority: string; adGroup: string; rows: CampaignKeywordRow[] }[] = [];
+    const groups: {
+      campaign: string;
+      campaignIndex: number;
+      priority: string;
+      adGroupPriority: string;
+      adGroup: string;
+      adGroupIndex: number;
+      hasAdCopy: boolean;
+      rows: CampaignKeywordRow[];
+    }[] = [];
     const keyMap = new Map<string, CampaignKeywordRow[]>();
 
     for (const row of filteredRows) {
-      const key = `${row.campaign}|||${row.adGroup}`;
+      const key = `${row.campaignIndex}|||${row.adGroupIndex}`;
       if (!keyMap.has(key)) {
         keyMap.set(key, []);
         groups.push({
           campaign: row.campaign,
+          campaignIndex: row.campaignIndex,
           priority: row.priority,
           adGroupPriority: row.adGroupPriority,
           adGroup: row.adGroup,
+          adGroupIndex: row.adGroupIndex,
+          hasAdCopy: row.hasAdCopy,
           rows: keyMap.get(key)!,
         });
       }
@@ -537,6 +561,20 @@ export function CampaignDataTable({ campaigns }: { campaigns: CampaignStructureV
       defaultPageSize={50}
       toolbar={toolbar}
       hideCampaignLabelInGroups={campaignNames.length === 1}
+      renderGroupActions={onViewAdGroup ? (group) => (
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-6 text-[10px]"
+          onClick={() => {
+            if (typeof group.campaignIndex !== 'number' || typeof group.adGroupIndex !== 'number') return;
+            onViewAdGroup({ campaignIndex: group.campaignIndex, adGroupIndex: group.adGroupIndex });
+          }}
+        >
+          <ArrowRight className="mr-1 h-3 w-3" />
+          {group.hasAdCopy ? 'View Ad' : 'Add Ad'}
+        </Button>
+      ) : undefined}
     />
   );
 }

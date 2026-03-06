@@ -228,7 +228,7 @@ export function StepEnhance() {
           variant="outline"
           size="sm"
           className="h-8"
-          onClick={() => dispatch({ type: 'SET_STEP', step: 'research' })}
+          onClick={() => dispatch({ type: 'SET_STEP', step: 'competitors' })}
           disabled={isProcessing}
         >
           Back

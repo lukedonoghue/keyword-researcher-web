@@ -47,8 +47,9 @@ export type CompetitorResearchResult = {
   usage: { promptTokens: number; completionTokens: number; totalTokens: number };
 };
 
-const MAX_COMPETITORS = 30;
-const KEYWORD_RESEARCH_COMPETITOR_LIMIT = 15;
+const MAX_COMPETITORS = 50;
+const KEYWORD_RESEARCH_COMPETITOR_LIMIT = 20;
+const COMPETITOR_DISCOVERY_SERVICE_LIMIT = 4;
 
 export class PerplexityService {
   private client: OpenRouterService;
@@ -174,6 +175,26 @@ export class PerplexityService {
     }
   }
 
+  private buildCompetitorDiscoveryPrompts(
+    targetUrl: string,
+    services: string[],
+    location?: string,
+  ): string[] {
+    const locationSuffix = location ? ` in ${location}` : '';
+    const normalizedServices = services.filter((service) => typeof service === 'string' && service.trim().length > 0);
+    const prompts = new Set<string>();
+
+    prompts.add(`Find up to ${MAX_COMPETITORS} direct competitors for ${targetUrl} which offers: ${normalizedServices.join(', ')}${locationSuffix}`);
+    prompts.add(`Find local and regional businesses competing with ${targetUrl} for these services: ${normalizedServices.join(', ')}${locationSuffix}. Return up to ${MAX_COMPETITORS} unique competitors.`);
+
+    for (const service of normalizedServices.slice(0, COMPETITOR_DISCOVERY_SERVICE_LIMIT)) {
+      prompts.add(`Find direct competitors for the service "${service}"${locationSuffix}. Prioritize businesses a prospect would compare against ${targetUrl}. Return up to 15 unique competitors with domains.`);
+      prompts.add(`Search for local companies advertising "${service}"${locationSuffix}. Return only real service providers and installers, not directories or marketplaces.`);
+    }
+
+    return Array.from(prompts);
+  }
+
   async researchCompetitors(
     targetUrl: string,
     services: string[],
@@ -185,18 +206,29 @@ export class PerplexityService {
       const totalUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
       const locationCtx = location ? ` in ${location}` : '';
 
-      // Step 1: Find competitors
-      const { competitors, usage: usage1 } = await this.findCompetitorsWithFallback(
-        `You are a competitive intelligence analyst. Find as many strong direct competitors as you can verify for the given business, aiming for 20-30 when the market supports it.
+      // Step 1: Find competitors through multiple localized passes
+      const competitorSystemPrompt = `You are a competitive intelligence analyst. Find as many strong direct competitors as you can verify for the given business, aiming for 20-50 when the market supports it.
 Return JSON: { "competitors": [{ "name": string, "domain": string, "description": string }] }
 Focus on direct competitors offering similar services in the same market${locationCtx}.
 Prefer local and regional competitors over directories or marketplaces.
-Return up to ${MAX_COMPETITORS} competitors.`,
-        `Find up to ${MAX_COMPETITORS} direct competitors for ${targetUrl} which offers: ${services.join(', ')}${locationCtx}`
-      );
-      totalUsage.promptTokens += usage1.promptTokens;
-      totalUsage.completionTokens += usage1.completionTokens;
-      totalUsage.totalTokens += usage1.totalTokens;
+Exclude lead aggregators, directories, review sites, and suppliers that do not directly deliver the service.
+Return up to ${MAX_COMPETITORS} competitors.`;
+
+      const discoveredCompetitors: CompetitorInfo[] = [];
+      for (const prompt of this.buildCompetitorDiscoveryPrompts(targetUrl, services, location)) {
+        const { competitors: batchCompetitors, usage } = await this.findCompetitorsWithFallback(
+          competitorSystemPrompt,
+          prompt,
+        );
+        totalUsage.promptTokens += usage.promptTokens;
+        totalUsage.completionTokens += usage.completionTokens;
+        totalUsage.totalTokens += usage.totalTokens;
+        discoveredCompetitors.push(...batchCompetitors);
+        if (discoveredCompetitors.length >= MAX_COMPETITORS) {
+          break;
+        }
+      }
+      const competitors = this.normalizeCompetitors(discoveredCompetitors);
 
       // Step 2: Extract competitor keywords (10-15 per service)
       const competitorDomains = competitors

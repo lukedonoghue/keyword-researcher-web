@@ -14,6 +14,7 @@ const STEP_DESCRIPTIONS: Record<WizardStep, string> = {
   geo: 'Set target market',
   strategy: 'Configure filters',
   research: 'Gather keywords',
+  competitors: 'Review competitors',
   enhance: 'AI refinement',
   review: 'Audit keywords',
   campaign: 'Build & export',

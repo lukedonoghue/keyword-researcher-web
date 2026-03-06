@@ -4,13 +4,15 @@ import { useEffect, useState } from 'react';
 import Image from 'next/image';
 import { useAuth } from '@/providers/auth-provider';
 import { useTheme } from '@/providers/theme-provider';
+import { useWorkflow } from '@/providers/workflow-provider';
 import { Button } from '@/components/ui/button';
-import { Sun, Moon } from 'lucide-react';
+import { RotateCcw, Sun, Moon } from 'lucide-react';
 import packageJson from '../../../package.json';
 
 export function Header() {
-  const { authenticated, customerId, logout } = useAuth();
+  const { authenticated, customerId, loginCustomerId, selectedAccountName, logout } = useAuth();
   const { toggleTheme } = useTheme();
+  const { state, restart } = useWorkflow();
   const fallbackBuild = typeof packageJson.version === 'string' ? `v${packageJson.version}` : 'v0.0.0';
   const [buildLabel, setBuildLabel] = useState<string>(fallbackBuild);
 
@@ -31,6 +33,20 @@ export function Header() {
     void loadBuild();
     return () => { cancelled = true; };
   }, []);
+
+  const canRestart =
+    state.currentStep !== 'setup' ||
+    state.targetUrl.trim().length > 0 ||
+    state.discoveredServices.length > 0 ||
+    state.seedKeywords.length > 0 ||
+    state.campaigns.length > 0;
+
+  const handleRestart = () => {
+    if (!canRestart) return;
+    const confirmed = window.confirm('Restart the workflow and clear the current wizard progress? Your Google Ads connection and AI key will stay connected.');
+    if (!confirmed) return;
+    restart();
+  };
 
   return (
     <header className="sticky top-0 z-40 relative border-b border-border/70 bg-card/85 backdrop-blur supports-[backdrop-filter]:bg-card/75 shadow-[0_1px_8px_0_rgb(0,0,0,0.04)] dark:shadow-[0_2px_10px_0_rgb(0,0,0,0.2)]">
@@ -59,12 +75,31 @@ export function Header() {
             </span>
           </div>
           {customerId && (
-            <span className="rounded border border-border px-2 py-0.5 text-[11px] text-muted-foreground font-mono">
-              {customerId}
-            </span>
+            <div className="flex items-center gap-1.5 rounded border border-border px-2 py-0.5 text-[11px] text-muted-foreground">
+              <span className="max-w-[180px] truncate" title={selectedAccountName || customerId}>
+                {selectedAccountName || customerId}
+              </span>
+              <span className="font-mono">({customerId})</span>
+              {loginCustomerId && (
+                <span className="hidden text-[10px] text-muted-foreground/80 sm:inline">
+                  via {loginCustomerId}
+                </span>
+              )}
+            </div>
           )}
         </div>
         <div className="flex items-center gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleRestart}
+            disabled={!canRestart}
+            className="h-7 text-xs"
+            title="Restart the wizard and clear saved progress"
+          >
+            <RotateCcw className="mr-1 h-3.5 w-3.5" />
+            Restart
+          </Button>
           <span className="text-[10px] font-medium text-muted-foreground/80 tracking-wide">
             build {buildLabel}
           </span>

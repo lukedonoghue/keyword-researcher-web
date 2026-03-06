@@ -6,13 +6,19 @@ type AuthState = {
   authenticated: boolean;
   hasCustomerId: boolean;
   customerId: string | null;
+  loginCustomerId: string | null;
+  selectedAccountName: string | null;
   loading: boolean;
 };
 
 type AuthContextType = AuthState & {
   checkAuth: () => Promise<void>;
   logout: () => Promise<void>;
-  selectAccount: (customerId: string) => Promise<void>;
+  selectAccount: (selection: {
+    customerId: string;
+    loginCustomerId?: string | null;
+    descriptiveName?: string | null;
+  }) => Promise<void>;
   openrouterApiKey: string;
   setOpenrouterApiKey: (key: string) => void;
   openrouterModel: string;
@@ -28,6 +34,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     authenticated: false,
     hasCustomerId: false,
     customerId: null,
+    loginCustomerId: null,
+    selectedAccountName: null,
     loading: true,
   });
   const [openrouterApiKey, setOpenrouterApiKeyState] = useState(() => {
@@ -42,11 +50,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const checkAuth = useCallback(async () => {
     try {
       const res = await fetch('/api/auth/status');
-      const data = await res.json();
+      const data = await res.json() as {
+        authenticated?: boolean;
+        hasCustomerId?: boolean;
+        customerId?: string | null;
+        loginCustomerId?: string | null;
+        selectedAccountName?: string | null;
+      };
       setState({
-        authenticated: data.authenticated,
-        hasCustomerId: data.hasCustomerId,
-        customerId: data.customerId,
+        authenticated: Boolean(data.authenticated),
+        hasCustomerId: Boolean(data.hasCustomerId),
+        customerId: data.customerId || null,
+        loginCustomerId: data.loginCustomerId || null,
+        selectedAccountName: data.selectedAccountName || null,
         loading: false,
       });
     } catch {
@@ -56,18 +72,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = useCallback(async () => {
     await fetch('/api/auth/logout', { method: 'POST' });
-    setState({ authenticated: false, hasCustomerId: false, customerId: null, loading: false });
+    setState({
+      authenticated: false,
+      hasCustomerId: false,
+      customerId: null,
+      loginCustomerId: null,
+      selectedAccountName: null,
+      loading: false,
+    });
   }, []);
 
-  const selectAccount = useCallback(async (customerId: string) => {
+  const selectAccount = useCallback(async (selection: {
+    customerId: string;
+    loginCustomerId?: string | null;
+    descriptiveName?: string | null;
+  }) => {
     const res = await fetch('/api/google-ads/accounts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ customerId }),
+      body: JSON.stringify(selection),
     });
-    if (res.ok) {
-      setState((prev) => ({ ...prev, hasCustomerId: true, customerId }));
+    const data = await res.json().catch(() => null) as { error?: string } | null;
+    if (!res.ok) {
+      throw new Error(data?.error || 'Failed to select Google Ads account');
     }
+    setState((prev) => ({
+      ...prev,
+      hasCustomerId: true,
+      customerId: selection.customerId,
+      loginCustomerId: selection.loginCustomerId || null,
+      selectedAccountName: selection.descriptiveName || prev.selectedAccountName,
+    }));
   }, []);
 
   const setOpenrouterApiKey = useCallback((key: string) => {

@@ -313,9 +313,9 @@ export function StepResearch() {
             variant="brand"
             size="sm"
             className="h-9 flex-1"
-            onClick={() => dispatch({ type: 'SET_STEP', step: 'enhance' })}
+            onClick={() => dispatch({ type: 'SET_STEP', step: 'competitors' })}
           >
-            Continue to AI Enhancement
+            Review Competitors
           </Button>
         )}
       </div>

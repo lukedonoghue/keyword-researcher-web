@@ -63,13 +63,8 @@ export function StepSetup() {
                 </div>
                 {!authenticated ? (
                   <GoogleSignIn />
-                ) : !hasCustomerId ? (
-                  <AccountSelector />
                 ) : (
-                  <div className="flex items-center gap-1.5">
-                    <Check className="h-3.5 w-3.5 text-green-500" />
-                    <span className="text-xs text-muted-foreground">Connected</span>
-                  </div>
+                  <AccountSelector />
                 )}
               </div>
             </div>

@@ -8,7 +8,7 @@ import type {
 } from '../types/index';
 import { getKeywordQualityScore } from './quality-score';
 import { dedupeSeedKeywords } from './keyword-merge';
-import { normalizeKeywordText } from './keyword-signals';
+import { analyzeKeywordSignals, isOwnerStyleQuery, normalizeKeywordText } from './keyword-signals';
 
 const BATCH_SIZE = 80;
 const MAX_CONCURRENT_BATCHES = 4;
@@ -142,6 +142,39 @@ function normalizeNegativeSuggestion(
   };
 }
 
+function applyIntentGuardrails(
+  keyword: SeedKeyword,
+  aiResult: { intent: KeywordIntent; confidence: number; reason: string; isNegative: boolean },
+): { intent: KeywordIntent; confidence: number; reason: string; isNegative: boolean } {
+  const normalized = normalizeKeywordText(keyword.text);
+  const signalIntent = analyzeKeywordSignals(keyword.text);
+
+  if (isOwnerStyleQuery(normalized)) {
+    return {
+      intent: 'informational',
+      confidence: Math.max(aiResult.confidence, 0.76),
+      reason: 'Owner/support-style query override',
+      isNegative: true,
+    };
+  }
+
+  if (
+    aiResult.intent === 'navigational' &&
+    signalIntent.intent !== 'navigational' &&
+    signalIntent.intent !== 'unknown' &&
+    signalIntent.intentConfidence >= 0.3
+  ) {
+    return {
+      intent: signalIntent.intent,
+      confidence: Math.max(aiResult.confidence, signalIntent.intentConfidence),
+      reason: `Rule-based override: ${signalIntent.intentReason}`,
+      isNegative: aiResult.isNegative || keyword.isNegativeCandidate || false,
+    };
+  }
+
+  return aiResult;
+}
+
 // --- Phase 1: Intent Classification ---
 export async function runIntentPhase(
   keywords: SeedKeyword[],
@@ -171,6 +204,7 @@ export async function runIntentPhase(
         `You are a PPC keyword intent classifier for a ${targetDomain} business offering these services: ${services.join(', ')}.
 Classify each keyword's search intent and detect truly negative/irrelevant keywords for Google Ads.
 Set isNegative=true only for clear exclusion intent such as competitor brand queries, jobs/careers, DIY/research-only terms, support/login/account terms, used/free terms, or obviously unrelated topics.
+Queries written like existing-owner/support lookups such as "my [product/service]" are not navigational demand. Treat them as informational or low-value support intent, and mark them negative when they are unlikely to convert.
 Do NOT mark a keyword negative only because it is informational, comparison, review-oriented, pricing-related, or early-funnel if it is still relevant to the service.
 Preserve service-adjacent category terms that could belong in a catch-all or specialist ad group. Those terms should be routed later, not suppressed here.
 Return JSON: { "keywords": [{ "text": string, "intent": "transactional"|"commercial"|"informational"|"navigational", "confidence": 0-1, "reason": string, "isNegative": boolean }] }`,
@@ -182,16 +216,17 @@ Return JSON: { "keywords": [{ "text": string, "intent": "transactional"|"commerc
         const key = item.text.toLowerCase();
         const kw = keywordMap.get(key);
         if (!kw) continue;
-        if (kw.intent !== item.intent) intentChanges++;
-        if ((kw.isNegativeCandidate || false) !== item.isNegative) negativesReclassified++;
-        kw.intent = item.intent;
-        kw.intentConfidence = item.confidence;
-        kw.intentReason = item.reason;
-        kw.isNegativeCandidate = item.isNegative;
+        const guarded = applyIntentGuardrails(kw, item);
+        if (kw.intent !== guarded.intent) intentChanges++;
+        if ((kw.isNegativeCandidate || false) !== guarded.isNegative) negativesReclassified++;
+        kw.intent = guarded.intent;
+        kw.intentConfidence = guarded.confidence;
+        kw.intentReason = guarded.reason;
+        kw.isNegativeCandidate = guarded.isNegative;
         kw.aiEnhanced = true;
-        kw.aiIntentOverride = item.intent;
-        kw.aiConfidence = item.confidence;
-        kw.aiReason = item.reason;
+        kw.aiIntentOverride = guarded.intent;
+        kw.aiConfidence = guarded.confidence;
+        kw.aiReason = guarded.reason;
       }
       return data;
     } catch { return null; }
