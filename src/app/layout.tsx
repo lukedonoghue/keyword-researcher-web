@@ -45,8 +45,8 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
-        <div className="pointer-events-none fixed right-3 top-[52px] z-[9999] rounded bg-amber-300 px-2 py-1 text-[11px] font-bold text-black shadow-lg ring-1 ring-black/60">
-          BUILD {buildLabel}
+        <div className="pointer-events-none fixed bottom-2 right-2 z-[9999] rounded bg-amber-300 px-2 py-0.5 text-[10px] font-bold text-black shadow-lg ring-1 ring-black/60 opacity-80">
+          {buildLabel}
         </div>
         <ThemeProvider>
           <TooltipProvider>
