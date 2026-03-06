@@ -87,7 +87,13 @@ export function StepResearch() {
   const topKeywords = useMemo(() => {
     return state.selectedKeywords
       .slice()
-      .sort((a, b) => b.volume - a.volume)
+      .sort((a, b) => {
+        // Keywords with real CPC data first, then by volume
+        const aHasCpc = a.cpc > 0 ? 1 : 0;
+        const bHasCpc = b.cpc > 0 ? 1 : 0;
+        if (bHasCpc !== aHasCpc) return bHasCpc - aHasCpc;
+        return b.volume - a.volume;
+      })
       .slice(0, 10);
   }, [state.selectedKeywords]);
 
@@ -153,12 +159,18 @@ export function StepResearch() {
                             <TableCell className="text-xs py-1.5">{kw.text}</TableCell>
                             <TableCell className="text-xs py-1.5 text-right tabular-nums">{kw.volume.toLocaleString()}</TableCell>
                             <TableCell className="text-xs py-1.5 text-right tabular-nums">
-                              ${kw.cpc.toFixed(2)}
-                              {(kw.cpcLow || kw.cpcHigh) ? (
-                                <span className="text-[10px] text-muted-foreground block">
-                                  ${(kw.cpcLow ?? 0).toFixed(2)}–${(kw.cpcHigh ?? 0).toFixed(2)}
-                                </span>
-                              ) : null}
+                              {kw.cpc > 0 ? (
+                                <>
+                                  ${kw.cpc.toFixed(2)}
+                                  {(kw.cpcLow || kw.cpcHigh) ? (
+                                    <span className="text-[10px] text-muted-foreground block">
+                                      ${(kw.cpcLow ?? 0).toFixed(2)}–${(kw.cpcHigh ?? 0).toFixed(2)}
+                                    </span>
+                                  ) : null}
+                                </>
+                              ) : (
+                                <span className="text-[10px] text-muted-foreground italic">Low data</span>
+                              )}
                             </TableCell>
                           </TableRow>
                         ))}
@@ -212,6 +224,17 @@ export function StepResearch() {
                       <p>Pre-merge: {pipelineStats.preMerge.count} kws, {pipelineStats.preMerge.distinctCpcs} distinct CPCs, ${pipelineStats.preMerge.cpcRange[0].toFixed(2)}–${pipelineStats.preMerge.cpcRange[1].toFixed(2)}</p>
                       <p>Post-merge: {pipelineStats.postMerge.count} kws, {pipelineStats.postMerge.distinctCpcs} distinct CPCs, ${pipelineStats.postMerge.cpcRange[0].toFixed(2)}–${pipelineStats.postMerge.cpcRange[1].toFixed(2)}</p>
                       <p>Post-filter: {pipelineStats.postFilter.count} kws, {pipelineStats.postFilter.distinctCpcs} distinct CPCs, ${pipelineStats.postFilter.cpcRange[0].toFixed(2)}–${pipelineStats.postFilter.cpcRange[1].toFixed(2)}</p>
+                    </div>
+                    <div className="border-t border-green-200 dark:border-green-900 pt-1">
+                      <p className="font-medium">CPC data coverage</p>
+                      <p className="text-muted-foreground">
+                        With CPC data: {state.selectedKeywords.filter(kw => kw.cpc > 0).length} keywords
+                        {' · '}$0.00 CPC (low data): {state.selectedKeywords.filter(kw => kw.cpc === 0).length} keywords
+                      </p>
+                      <p className="font-medium mt-1">Filter summary</p>
+                      <p className="text-muted-foreground">
+                        {state.seedKeywords.length} total → {state.selectedKeywords.length} passed, {state.suppressedKeywords.length} filtered out
+                      </p>
                     </div>
                   </div>
                 </details>

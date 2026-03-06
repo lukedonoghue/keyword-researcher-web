@@ -22,11 +22,13 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import type { CampaignStructureV2, KeywordIntent } from '@/lib/types/index';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import type { CampaignStructureV2, KeywordIntent, AdGroupPriority } from '@/lib/types/index';
 
 type CampaignKeywordRow = {
   campaign: string;
   priority: 'high' | 'medium' | 'low' | '';
+  adGroupPriority: AdGroupPriority | '';
   adGroup: string;
   keyword: string;
   matchType: string;
@@ -48,6 +50,18 @@ const priorityColors = {
   medium: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-300',
   low: 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400',
 } as const;
+
+const adGroupPriorityColors: Record<string, string> = {
+  core: 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300',
+  recommended: 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300',
+  additional: 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400',
+};
+
+const adGroupPriorityLabels: Record<string, string> = {
+  core: 'Core',
+  recommended: 'Recommended',
+  additional: 'Additional',
+};
 
 const qualityLabels: Record<string, string> = {
   A: 'High',
@@ -90,6 +104,7 @@ function flattenCampaigns(campaigns: CampaignStructureV2[]): CampaignKeywordRow[
           rows.push({
             campaign: campaign.campaignName,
             priority: campaign.priority || '',
+            adGroupPriority: ag.priority || '',
             adGroup: ag.name,
             keyword: kw.keyword,
             matchType: kw.matchType,
@@ -138,13 +153,26 @@ const columns: ColumnDef<CampaignKeywordRow>[] = [
   },
   {
     accessorKey: 'priority',
-    header: ({ column }) => <SortableHeader column={column} label="Priority" />,
+    header: ({ column }) => <SortableHeader column={column} label="Campaign Priority" />,
     cell: ({ getValue }) => {
       const v = getValue<string>();
       if (!v) return null;
       return (
         <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${priorityColors[v as keyof typeof priorityColors]}`}>
           {v.charAt(0).toUpperCase() + v.slice(1)}
+        </span>
+      );
+    },
+  },
+  {
+    accessorKey: 'adGroupPriority',
+    header: ({ column }) => <SortableHeader column={column} label="Ad Group Tier" />,
+    cell: ({ getValue }) => {
+      const v = getValue<string>();
+      if (!v) return null;
+      return (
+        <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${adGroupPriorityColors[v] ?? 'bg-gray-100 text-gray-600'}`}>
+          {adGroupPriorityLabels[v] ?? v}
         </span>
       );
     },
@@ -161,7 +189,12 @@ const columns: ColumnDef<CampaignKeywordRow>[] = [
   {
     accessorKey: 'keyword',
     header: ({ column }) => <SortableHeader column={column} label="Keyword" />,
-    cell: ({ getValue }) => <span className="font-mono">{getValue<string>()}</span>,
+    cell: ({ row }) => {
+      const kw = row.getValue<string>('keyword');
+      const mt = row.original.matchType;
+      const formatted = mt === 'Exact' ? `[${kw}]` : mt === 'Phrase' ? `"${kw}"` : kw;
+      return <span className="font-mono">{formatted}</span>;
+    },
   },
   {
     accessorKey: 'matchType',
@@ -210,13 +243,28 @@ const columns: ColumnDef<CampaignKeywordRow>[] = [
       const cpc = row.getValue<number>('cpc');
       const low = row.original.cpcLow;
       const high = row.original.cpcHigh;
-      const tooltip = low || high
-        ? `CPC: $${cpc.toFixed(2)}\nTop of page (low): $${low.toFixed(2)}\nTop of page (high): $${high.toFixed(2)}`
-        : `$${cpc.toFixed(2)}`;
+      if (cpc === 0) {
+        return (
+          <span className="text-right block text-[10px] text-muted-foreground italic">Low data</span>
+        );
+      }
+      if (low > 0 || high > 0) {
+        return (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="tabular-nums text-right block cursor-help">
+                ${cpc.toFixed(2)}
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="left" className="text-xs tabular-nums">
+              <p>Top of page (low): ${low.toFixed(2)}</p>
+              <p>Top of page (high): ${high.toFixed(2)}</p>
+            </TooltipContent>
+          </Tooltip>
+        );
+      }
       return (
-        <span className="tabular-nums text-right block cursor-help" title={tooltip}>
-          ${cpc.toFixed(2)}
-        </span>
+        <span className="tabular-nums text-right block">${cpc.toFixed(2)}</span>
       );
     },
   },
@@ -293,6 +341,7 @@ const columns: ColumnDef<CampaignKeywordRow>[] = [
 ];
 
 const defaultColumnVisibility: Record<string, boolean> = {
+  priority: false,
   cpcLow: false,
   cpcHigh: false,
   competitionIndex: false,
@@ -317,6 +366,7 @@ export function CampaignDataTable({ campaigns }: { campaigns: CampaignStructureV
   const [keywordFilter, setKeywordFilter] = useState('');
   const [campaignFilter, setCampaignFilter] = useState('all');
   const [priorityFilter, setPriorityFilter] = useState('all');
+  const [adGroupPriorityFilter, setAdGroupPriorityFilter] = useState('core+recommended');
   const [matchTypeFilter, setMatchTypeFilter] = useState('all');
   const [colVisibility, setColVisibility] = useState(defaultColumnVisibility);
 
@@ -328,6 +378,11 @@ export function CampaignDataTable({ campaigns }: { campaigns: CampaignStructureV
     if (priorityFilter !== 'all') {
       result = result.filter((r) => r.priority === priorityFilter);
     }
+    if (adGroupPriorityFilter === 'core+recommended') {
+      result = result.filter((r) => r.adGroupPriority !== 'additional');
+    } else if (adGroupPriorityFilter !== 'all') {
+      result = result.filter((r) => r.adGroupPriority === adGroupPriorityFilter);
+    }
     if (matchTypeFilter !== 'all') {
       result = result.filter((r) => r.matchType === matchTypeFilter);
     }
@@ -336,7 +391,7 @@ export function CampaignDataTable({ campaigns }: { campaigns: CampaignStructureV
       result = result.filter((r) => r.keyword.toLowerCase().includes(lower));
     }
     return result;
-  }, [rows, campaignFilter, priorityFilter, matchTypeFilter, keywordFilter]);
+  }, [rows, campaignFilter, priorityFilter, adGroupPriorityFilter, matchTypeFilter, keywordFilter]);
 
   // Group rows by campaign > ad group for display
   const groupedData = useMemo(() => {
@@ -365,7 +420,8 @@ export function CampaignDataTable({ campaigns }: { campaigns: CampaignStructureV
 
   const columnLabels: Record<string, string> = {
     campaign: 'Campaign',
-    priority: 'Priority',
+    priority: 'Campaign Priority',
+    adGroupPriority: 'Ad Group Tier',
     adGroup: 'Ad Group',
     keyword: 'Keyword',
     matchType: 'Match Type',
@@ -407,15 +463,16 @@ export function CampaignDataTable({ campaigns }: { campaigns: CampaignStructureV
         </SelectContent>
       </Select>
 
-      <Select value={priorityFilter} onValueChange={setPriorityFilter}>
-        <SelectTrigger size="sm" className="h-8 text-[11px] w-auto min-w-[100px]">
-          <SelectValue placeholder="Priority" />
+      <Select value={adGroupPriorityFilter} onValueChange={setAdGroupPriorityFilter}>
+        <SelectTrigger size="sm" className="h-8 text-[11px] w-auto min-w-[130px]">
+          <SelectValue placeholder="Ad Group Tier" />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value="all">All Priorities</SelectItem>
-          <SelectItem value="high">High</SelectItem>
-          <SelectItem value="medium">Medium</SelectItem>
-          <SelectItem value="low">Low</SelectItem>
+          <SelectItem value="core+recommended">Core + Recommended</SelectItem>
+          <SelectItem value="all">All Tiers</SelectItem>
+          <SelectItem value="core">Core Only</SelectItem>
+          <SelectItem value="recommended">Recommended Only</SelectItem>
+          <SelectItem value="additional">Additional Only</SelectItem>
         </SelectContent>
       </Select>
 

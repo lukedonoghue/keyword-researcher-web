@@ -22,19 +22,19 @@ const presets: {
     label: 'Conservative',
     description: 'Lower spend, high-intent only',
     icon: Shield,
-    values: { monthlyBudget: 1000, minVolume: 100, maxCpc: null, focusHighIntent: true, includeInformational: false },
+    values: { monthlyBudget: 1000, minVolume: 50, maxCpc: null, focusHighIntent: true, includeInformational: false },
   },
   {
     label: 'Balanced',
     description: 'Recommended defaults',
     icon: Target,
-    values: { monthlyBudget: 2000, minVolume: 50, maxCpc: null, focusHighIntent: true, includeInformational: false },
+    values: { monthlyBudget: 2000, minVolume: 10, maxCpc: null, focusHighIntent: false, includeInformational: false },
   },
   {
     label: 'Aggressive',
     description: 'Max reach, all intents',
     icon: Zap,
-    values: { monthlyBudget: 5000, minVolume: 20, maxCpc: null, focusHighIntent: false, includeInformational: true },
+    values: { monthlyBudget: 5000, minVolume: 10, maxCpc: null, focusHighIntent: false, includeInformational: true },
   },
 ];
 

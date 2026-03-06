@@ -18,10 +18,10 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Download, Upload, Pencil, FileSpreadsheet, ArrowRight, ChevronRight, Settings2, TableIcon, List } from 'lucide-react';
+import { Download, Upload, Pencil, FileSpreadsheet, ArrowRight, ChevronRight, Settings2, TableIcon, List, MapPin } from 'lucide-react';
 import { calculateRecommendedBudget, estimatedDailyClicks, estimatedMonthlyConversions } from '@/lib/logic/budget-calculator';
 import { CampaignDataTable } from '@/components/wizard/campaign-data-table';
-import type { CampaignStructureV2 } from '@/lib/types/index';
+import type { CampaignStructureV2, AdGroupPriority } from '@/lib/types/index';
 
 const priorityColors = {
   high: 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300',
@@ -42,6 +42,18 @@ const intentBarColors = {
   navigational: 'bg-gray-400',
   unknown: 'bg-gray-300',
 } as const;
+
+const adGroupPriorityColors: Record<AdGroupPriority, string> = {
+  core: 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300',
+  recommended: 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300',
+  additional: 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400',
+};
+
+const adGroupPriorityLabels: Record<AdGroupPriority, string> = {
+  core: 'Core',
+  recommended: 'Recommended',
+  additional: 'Additional',
+};
 
 function getCampaignStats(campaigns: CampaignStructureV2[]) {
   let totalAdGroups = 0;
@@ -105,6 +117,7 @@ export function StepCampaign() {
   const [showNegatives, setShowNegatives] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [viewMode, setViewMode] = useState<'table' | 'tree'>('table');
+  const [showAdditional, setShowAdditional] = useState(false);
 
   const keywordsForBudget = useMemo(
     () => (state.enhancedKeywords.length > 0 ? state.enhancedKeywords : state.selectedKeywords),
@@ -150,6 +163,28 @@ export function StepCampaign() {
     () => Math.max(...campaignKwCounts, 1),
     [campaignKwCounts]
   );
+
+  // Split ad groups by priority for display
+  const adGroupPriorityCounts = useMemo(() => {
+    let core = 0, recommended = 0, additional = 0;
+    for (const campaign of state.campaigns) {
+      for (const ag of campaign.adGroups) {
+        if (ag.priority === 'core') core++;
+        else if (ag.priority === 'recommended') recommended++;
+        else additional++;
+      }
+    }
+    return { core, recommended, additional };
+  }, [state.campaigns]);
+
+  // For tree view: split each campaign's ad groups into main vs additional
+  const campaignsWithSplit = useMemo(() => {
+    return state.campaigns.map((campaign) => {
+      const mainGroups = campaign.adGroups.filter((ag) => ag.priority !== 'additional');
+      const additionalGroups = campaign.adGroups.filter((ag) => ag.priority === 'additional');
+      return { campaign, mainGroups, additionalGroups };
+    });
+  }, [state.campaigns]);
 
   const handleExportGoogleAds = useCallback(async () => {
     const res = await fetch('/api/export-csv', {
@@ -260,9 +295,23 @@ export function StepCampaign() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-base font-semibold">Campaign Structure</h2>
+          <div className="flex items-center gap-2">
+            <h2 className="text-base font-semibold">Campaign Structure</h2>
+            {state.geoDisplayName && (
+              <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-300 font-medium">
+                <MapPin className="h-2.5 w-2.5" />
+                {state.geoDisplayName}
+              </span>
+            )}
+          </div>
           <p className="text-xs text-muted-foreground mt-0.5">
-            {state.campaigns.length} campaign{state.campaigns.length !== 1 ? 's' : ''}, {stats.totalKeywords} keyword rows.
+            {state.campaigns.length} campaign{state.campaigns.length !== 1 ? 's' : ''}, {stats.totalKeywords} keyword rows
+            {(adGroupPriorityCounts.core > 0 || adGroupPriorityCounts.recommended > 0) && (
+              <span className="ml-1">
+                &middot; {adGroupPriorityCounts.core} core &middot; {adGroupPriorityCounts.recommended} recommended
+                {adGroupPriorityCounts.additional > 0 && <> &middot; {adGroupPriorityCounts.additional} additional</>}
+              </span>
+            )}
           </p>
         </div>
         <Button variant="outline" size="sm" className="h-8" onClick={() => dispatch({ type: 'SET_STEP', step: 'review' })}>
@@ -467,12 +516,77 @@ export function StepCampaign() {
       )}
 
       {/* Tree View (original accordions) */}
-      {viewMode === 'tree' && state.campaigns.map((campaign, ci) => {
+      {viewMode === 'tree' && campaignsWithSplit.map(({ campaign, mainGroups, additionalGroups }, ci) => {
         const campaignKwCount = campaignKwCounts[ci];
         const campaignAvgCpc = getCampaignAvgCpc(campaign, campaignKwCount);
         const campaignTotalVolume = getCampaignTotalVolume(campaign);
         const campEstLow = campaignAvgCpc * campaignTotalVolume * 0.02;
         const campEstHigh = campaignAvgCpc * campaignTotalVolume * 0.05;
+
+        const renderAdGroup = (adGroup: typeof campaign.adGroups[number], agi: number, defaultOpen: boolean) => {
+          const agKwCount = adGroup.subThemes.reduce((s, st) => s + st.keywords.length, 0);
+          return (
+            <AccordionItem key={agi} value={`ag-${ci}-${agi}`}>
+              <AccordionTrigger className="text-xs py-2 hover:no-underline">
+                <div className="flex items-center gap-2">
+                  <span className="font-medium">Ad Group: {adGroup.name}</span>
+                  {adGroup.priority && (
+                    <span className={`text-[9px] px-1.5 py-0 rounded-full font-medium ${adGroupPriorityColors[adGroup.priority]}`}>
+                      {adGroupPriorityLabels[adGroup.priority]}
+                    </span>
+                  )}
+                  <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+                    {agKwCount} kw
+                  </Badge>
+                </div>
+              </AccordionTrigger>
+              <AccordionContent>
+                <div className="ml-2 space-y-2">
+                  {adGroup.subThemes.map((subTheme, sti) => (
+                    <Accordion key={sti} type="multiple" className="w-full">
+                      <AccordionItem value={`st-${ci}-${agi}-${sti}`} className="border-l-2 border-muted pl-3">
+                        <AccordionTrigger className="text-[11px] py-1.5 hover:no-underline">
+                          <div className="flex items-center gap-2">
+                            <span>{subTheme.name}</span>
+                            <Badge variant="outline" className="text-[9px] px-1 py-0">
+                              {subTheme.keywords.length} kw
+                            </Badge>
+                          </div>
+                        </AccordionTrigger>
+                        <AccordionContent>
+                          <Table>
+                            <TableHeader>
+                              <TableRow>
+                                <TableHead className="text-[10px]">Keyword</TableHead>
+                                <TableHead className="text-[10px]">Match</TableHead>
+                                <TableHead className="text-[10px] text-right">Vol</TableHead>
+                                <TableHead className="text-[10px] text-right">CPC</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {subTheme.keywords.map((kw, ki) => (
+                                <TableRow key={ki} className="h-7">
+                                  <TableCell className="text-[11px] font-mono py-0.5">
+                                    {kw.matchType === 'Exact' ? `[${kw.keyword}]` : kw.matchType === 'Phrase' ? `"${kw.keyword}"` : kw.keyword}
+                                  </TableCell>
+                                  <TableCell className="text-[11px] py-0.5">{kw.matchType}</TableCell>
+                                  <TableCell className="text-[11px] text-right py-0.5 tabular-nums">{kw.volume.toLocaleString()}</TableCell>
+                                  <TableCell className="text-[11px] text-right py-0.5 tabular-nums">
+                                    {kw.cpc > 0 ? `$${kw.cpc.toFixed(2)}` : <span className="text-[10px] text-muted-foreground italic">Low data</span>}
+                                  </TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </AccordionContent>
+                      </AccordionItem>
+                    </Accordion>
+                  ))}
+                </div>
+              </AccordionContent>
+            </AccordionItem>
+          );
+        };
 
         return (
           <Card key={ci}>
@@ -565,63 +679,34 @@ export function StepCampaign() {
               })()}
             </CardHeader>
             <CardContent className="pt-0">
-              <Accordion type="multiple" className="w-full">
-                {campaign.adGroups.map((adGroup, agi) => {
-                  const agKwCount = adGroup.subThemes.reduce((s, st) => s + st.keywords.length, 0);
-                  return (
-                    <AccordionItem key={agi} value={`ag-${ci}-${agi}`}>
-                      <AccordionTrigger className="text-xs py-2 hover:no-underline">
-                        <div className="flex items-center gap-2">
-                          <span className="font-medium">Ad Group: {adGroup.name}</span>
-                          <Badge variant="outline" className="text-[10px] px-1.5 py-0">
-                            {agKwCount} kw
-                          </Badge>
-                        </div>
-                      </AccordionTrigger>
-                      <AccordionContent>
-                        <div className="ml-2 space-y-2">
-                          {adGroup.subThemes.map((subTheme, sti) => (
-                            <Accordion key={sti} type="multiple" className="w-full">
-                              <AccordionItem value={`st-${ci}-${agi}-${sti}`} className="border-l-2 border-muted pl-3">
-                                <AccordionTrigger className="text-[11px] py-1.5 hover:no-underline">
-                                  <div className="flex items-center gap-2">
-                                    <span>{subTheme.name}</span>
-                                    <Badge variant="outline" className="text-[9px] px-1 py-0">
-                                      {subTheme.keywords.length} kw
-                                    </Badge>
-                                  </div>
-                                </AccordionTrigger>
-                                <AccordionContent>
-                                  <Table>
-                                    <TableHeader>
-                                      <TableRow>
-                                        <TableHead className="text-[10px]">Keyword</TableHead>
-                                        <TableHead className="text-[10px]">Match</TableHead>
-                                        <TableHead className="text-[10px] text-right">Vol</TableHead>
-                                        <TableHead className="text-[10px] text-right">CPC</TableHead>
-                                      </TableRow>
-                                    </TableHeader>
-                                    <TableBody>
-                                      {subTheme.keywords.map((kw, ki) => (
-                                        <TableRow key={ki} className="h-7">
-                                          <TableCell className="text-[11px] font-mono py-0.5">{kw.keyword}</TableCell>
-                                          <TableCell className="text-[11px] py-0.5">{kw.matchType}</TableCell>
-                                          <TableCell className="text-[11px] text-right py-0.5 tabular-nums">{kw.volume.toLocaleString()}</TableCell>
-                                          <TableCell className="text-[11px] text-right py-0.5 tabular-nums">${kw.cpc.toFixed(2)}</TableCell>
-                                        </TableRow>
-                                      ))}
-                                    </TableBody>
-                                  </Table>
-                                </AccordionContent>
-                              </AccordionItem>
-                            </Accordion>
-                          ))}
-                        </div>
-                      </AccordionContent>
-                    </AccordionItem>
-                  );
-                })}
+              {/* Core + Recommended ad groups (expanded) */}
+              <Accordion type="multiple" defaultValue={mainGroups.map((_, agi) => `ag-${ci}-${agi}`)} className="w-full">
+                {mainGroups.map((adGroup, agi) => renderAdGroup(adGroup, agi, true))}
               </Accordion>
+
+              {/* Additional Opportunities (collapsed) */}
+              {additionalGroups.length > 0 && (
+                <div className="mt-3 border rounded-md">
+                  <button
+                    type="button"
+                    className="flex items-center gap-2 w-full px-3 py-2 text-left hover:bg-muted/30 transition-colors"
+                    onClick={() => setShowAdditional(!showAdditional)}
+                  >
+                    <ChevronRight className={`h-3.5 w-3.5 text-muted-foreground transition-transform ${showAdditional ? 'rotate-90' : ''}`} />
+                    <span className="text-xs font-medium text-muted-foreground">Additional Opportunities</span>
+                    <Badge variant="secondary" className="text-[10px] ml-auto">
+                      {additionalGroups.length} ad group{additionalGroups.length !== 1 ? 's' : ''}
+                    </Badge>
+                  </button>
+                  {showAdditional && (
+                    <div className="border-t px-2">
+                      <Accordion type="multiple" className="w-full">
+                        {additionalGroups.map((adGroup, agi) => renderAdGroup(adGroup, mainGroups.length + agi, false))}
+                      </Accordion>
+                    </div>
+                  )}
+                </div>
+              )}
             </CardContent>
           </Card>
         );

@@ -1,4 +1,4 @@
-import type { CampaignStructureV2, AdGroup, SubTheme, SubThemeKeyword } from '../types/index';
+import type { CampaignStructureV2, AdGroup, AdGroupPriority, SubTheme, SubThemeKeyword } from '../types/index';
 import { normalizeKeywordText } from './keyword-signals';
 
 interface KeywordMetric {
@@ -252,6 +252,14 @@ export class CampaignBuilder {
     return 'unknown';
   }
 
+  private static readonly actionIntents = new Set<string>(['transactional', 'commercial']);
+  private static readonly researchIntents = new Set<string>(['informational', 'navigational', 'unknown']);
+
+  private static classifyIntentTier(intent: string | undefined): 'action' | 'research' {
+    if (!intent) return 'research';
+    return this.actionIntents.has(intent) ? 'action' : 'research';
+  }
+
   private static buildAdGroupsV2(
     serviceProfile: ServiceProfile,
     campaignKeywords: KeywordMetric[],
@@ -260,82 +268,171 @@ export class CampaignBuilder {
     const sorted = this.sortKeywords([...campaignKeywords]);
     if (sorted.length === 0) return [];
 
-    // A7: For small keyword sets, use service name instead of "Catchall"
+    // For very small keyword sets, single group
     if (sorted.length <= limits.min * 2) {
-      const adGroupName = serviceProfile.name;
       const subThemes = this.buildSubThemesForGroup(sorted);
-      return [{ name: adGroupName, subThemes }];
+      return this.assignAdGroupPriority([{ name: serviceProfile.name, subThemes }]);
     }
 
-    // Group by theme
-    const themeBuckets = this.groupKeywordsByTheme(sorted, serviceProfile);
-    const adGroups: AdGroup[] = [];
-    const overflow: KeywordMetric[] = [];
+    // Step 1: Split by intent tier
+    const actionKeywords: KeywordMetric[] = [];
+    const researchKeywords: KeywordMetric[] = [];
 
-    for (const [theme, keywords] of themeBuckets.entries()) {
-      if (keywords.length < limits.min) {
-        overflow.push(...keywords);
-        continue;
-      }
-
-      const chunks = this.chunkKeywordsIntoGroups(keywords, limits);
-      if (chunks.length === 0) {
-        overflow.push(...keywords);
-        continue;
-      }
-
-      for (const [index, chunk] of chunks.entries()) {
-        if (chunk.length < limits.min) {
-          overflow.push(...chunk);
-          continue;
-        }
-        const suffix = chunks.length > 1 ? ` (${index + 1})` : '';
-        const groupName = `${this.toTitleCase(theme)}${suffix}`;
-        const subThemes = this.buildSubThemesForGroup(chunk);
-        adGroups.push({ name: groupName, subThemes });
-      }
-    }
-
-    // Handle overflow keywords properly — never exceed limits.max per ad group
-    if (overflow.length > 0) {
-      if (adGroups.length > 0) {
-        if (overflow.length >= limits.min) {
-          // Enough overflow for proper groups — chunk into "General (N)" groups
-          const chunks = this.chunkKeywordsIntoGroups(overflow, limits);
-          for (const [idx, chunk] of chunks.entries()) {
-            const suffix = chunks.length > 1 ? ` (${idx + 1})` : '';
-            const groupName = `General${suffix}`;
-            const subThemes = this.buildSubThemesForGroup(chunk);
-            adGroups.push({ name: groupName, subThemes });
-          }
-          // Any remainder too small for its own group — distribute round-robin
-          const totalChunked = chunks.reduce((s, c) => s + c.length, 0);
-          const remainder = overflow.slice(totalChunked);
-          this.distributeKeywordsRoundRobin(remainder, adGroups, limits);
-        } else {
-          // Too few for their own group — distribute one-at-a-time across existing groups
-          this.distributeKeywordsRoundRobin(overflow, adGroups, limits);
-        }
+    for (const kw of sorted) {
+      if (this.classifyIntentTier(kw.intent) === 'action') {
+        actionKeywords.push(kw);
       } else {
-        // No themed groups at all — create groups from sorted keywords
-        const chunks = this.chunkKeywordsIntoGroups(sorted, limits);
-        if (chunks.length > 0) {
-          for (const [idx, chunk] of chunks.entries()) {
-            const suffix = chunks.length > 1 ? ` (${idx + 1})` : '';
-            const groupName = `${serviceProfile.name}${suffix}`;
+        researchKeywords.push(kw);
+      }
+    }
+
+    const adGroups: AdGroup[] = [];
+    const serviceName = serviceProfile.name;
+
+    // Step 2: Build ad groups for each tier, sub-splitting by theme if over limit
+    for (const [tier, tierKeywords] of [['Action', actionKeywords], ['Research', researchKeywords]] as const) {
+      if (tierKeywords.length === 0) continue;
+
+      if (tierKeywords.length <= limits.max) {
+        // Fits in one group
+        const subThemes = this.buildSubThemesForGroup(tierKeywords);
+        adGroups.push({ name: `${serviceName} - ${tier}`, subThemes });
+      } else {
+        // Sub-split by modifier theme
+        const themeBuckets = this.groupKeywordsByTheme(tierKeywords, serviceProfile);
+        const overflow: KeywordMetric[] = [];
+
+        for (const [theme, keywords] of themeBuckets.entries()) {
+          if (keywords.length < limits.min) {
+            overflow.push(...keywords);
+            continue;
+          }
+
+          const chunks = this.chunkKeywordsIntoGroups(keywords, limits);
+          if (chunks.length === 0) {
+            overflow.push(...keywords);
+            continue;
+          }
+
+          for (const [index, chunk] of chunks.entries()) {
+            if (chunk.length < limits.min) {
+              overflow.push(...chunk);
+              continue;
+            }
+            const suffix = chunks.length > 1 ? ` (${index + 1})` : '';
+            const themeName = theme === 'General' ? '' : `: ${this.toTitleCase(theme)}`;
+            const groupName = `${serviceName} - ${tier}${themeName}${suffix}`;
             const subThemes = this.buildSubThemesForGroup(chunk);
             adGroups.push({ name: groupName, subThemes });
           }
-        } else {
-          // Even chunking failed (too few) — single group
-          const subThemes = this.buildSubThemesForGroup(sorted);
-          adGroups.push({ name: serviceProfile.name, subThemes });
+        }
+
+        // Handle overflow within this tier
+        if (overflow.length > 0) {
+          const tierGroups = adGroups.filter((ag) => ag.name.includes(`- ${tier}`));
+          if (tierGroups.length > 0 && overflow.length < limits.min) {
+            this.distributeKeywordsRoundRobin(overflow, tierGroups, limits);
+          } else if (overflow.length >= limits.min) {
+            const chunks = this.chunkKeywordsIntoGroups(overflow, limits);
+            for (const [idx, chunk] of chunks.entries()) {
+              const suffix = chunks.length > 1 ? ` (${idx + 1})` : '';
+              const subThemes = this.buildSubThemesForGroup(chunk);
+              adGroups.push({ name: `${serviceName} - ${tier}: General${suffix}`, subThemes });
+            }
+          } else {
+            // Too few and no tier groups exist — create a single group
+            const subThemes = this.buildSubThemesForGroup(overflow);
+            adGroups.push({ name: `${serviceName} - ${tier}`, subThemes });
+          }
         }
       }
     }
 
-    // Ensure no empty ad groups
-    return adGroups.filter((ag) => ag.subThemes.some((st) => st.keywords.length > 0));
+    // Ensure no empty ad groups, then assign priorities
+    const nonEmpty = adGroups.filter((ag) => ag.subThemes.some((st) => st.keywords.length > 0));
+    return this.assignAdGroupPriority(nonEmpty);
+  }
+
+  static assignAdGroupPriority(adGroups: AdGroup[]): AdGroup[] {
+    if (adGroups.length === 0) return adGroups;
+
+    // Compute metrics per ad group
+    const metrics = adGroups.map((ag) => {
+      const seen = new Set<string>();
+      let transactional = 0;
+      let commercial = 0;
+      let cpcSum = 0;
+      let volumeSum = 0;
+      let kwCount = 0;
+
+      for (const st of ag.subThemes) {
+        for (const kw of st.keywords) {
+          const key = kw.keyword.toLowerCase().trim();
+          if (seen.has(key)) continue;
+          seen.add(key);
+          const intent = kw.intent ?? 'unknown';
+          if (intent === 'transactional') transactional++;
+          if (intent === 'commercial') commercial++;
+          cpcSum += kw.cpc;
+          volumeSum += kw.volume;
+          kwCount++;
+        }
+      }
+
+      return { ag, transactional, commercial, cpcSum, volumeSum, kwCount };
+    });
+
+    const maxAvgCpc = Math.max(...metrics.map((m) => (m.kwCount > 0 ? m.cpcSum / m.kwCount : 0)), 0.01);
+    const maxVolume = Math.max(...metrics.map((m) => m.volumeSum), 1);
+
+    // Score each ad group
+    const scored = metrics.map((m) => {
+      const total = m.kwCount || 1;
+      const transactionalPct = (m.transactional / total) * 100;
+      const commercialPct = (m.commercial / total) * 100;
+      const avgCpc = m.kwCount > 0 ? m.cpcSum / m.kwCount : 0;
+      const normalizedAvgCpc = (avgCpc / maxAvgCpc) * 100;
+      const normalizedVolume = (m.volumeSum / maxVolume) * 100;
+
+      const score = Math.round(
+        (transactionalPct * 0.40) +
+        (commercialPct * 0.25) +
+        (normalizedAvgCpc * 0.20) +
+        (normalizedVolume * 0.15)
+      );
+
+      return { ag: m.ag, score, transactionalPct, commercialPct };
+    });
+
+    // Sort by score descending to find top 3
+    scored.sort((a, b) => b.score - a.score);
+
+    for (let i = 0; i < scored.length; i++) {
+      const { ag, score, transactionalPct, commercialPct } = scored[i];
+      let priority: AdGroupPriority;
+
+      if (i < 3 || score >= 60 || (transactionalPct + commercialPct) > 50) {
+        priority = 'core';
+      } else if (i < 5 || score >= 30) {
+        priority = 'recommended';
+      } else {
+        priority = 'additional';
+      }
+
+      ag.priority = priority;
+      ag.priorityScore = score;
+    }
+
+    // Re-sort: core first, then recommended, then additional (within each tier, by score desc)
+    const priorityOrder: Record<AdGroupPriority, number> = { core: 0, recommended: 1, additional: 2 };
+    adGroups.sort((a, b) => {
+      const pa = priorityOrder[a.priority ?? 'additional'];
+      const pb = priorityOrder[b.priority ?? 'additional'];
+      if (pa !== pb) return pa - pb;
+      return (b.priorityScore ?? 0) - (a.priorityScore ?? 0);
+    });
+
+    return adGroups;
   }
 
   private static buildSubThemesForGroup(keywords: KeywordMetric[]): SubTheme[] {

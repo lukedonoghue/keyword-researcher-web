@@ -61,11 +61,11 @@ export type WorkflowState = {
 const initialStrategy: CampaignStrategy = {
   goal: 'conversions',
   monthlyBudget: 2000,
-  minVolume: 50,
+  minVolume: 10,
   maxCpc: null,
   minAdGroupKeywords: 3,
   maxAdGroupKeywords: 20,
-  focusHighIntent: true,
+  focusHighIntent: false,
   includeInformational: false,
   includeNegativeCandidates: false,
 };

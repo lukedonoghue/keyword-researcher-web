@@ -125,9 +125,13 @@ export type SubTheme = {
   keywords: SubThemeKeyword[];
 };
 
+export type AdGroupPriority = 'core' | 'recommended' | 'additional';
+
 export type AdGroup = {
   name: string;
   subThemes: SubTheme[];
+  priority?: AdGroupPriority;
+  priorityScore?: number;
 };
 
 export type CampaignStructureV2 = {
