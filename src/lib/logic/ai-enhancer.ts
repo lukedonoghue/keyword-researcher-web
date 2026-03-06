@@ -5,7 +5,7 @@ import { dedupeSeedKeywords } from './keyword-merge';
 
 const BATCH_SIZE = 80;
 const MAX_CONCURRENT_BATCHES = 4;
-const DEFAULT_ENHANCE_MODEL = process.env.OPENROUTER_ENHANCE_MODEL?.trim() || 'google/gemini-2.5-pro';
+const DEFAULT_ENHANCE_MODEL = process.env.OPENROUTER_ENHANCE_MODEL?.trim() || 'google/gemini-3.1-pro-preview';
 
 function createEnhanceClient(apiKey: string): OpenRouterService {
   return new OpenRouterService(apiKey, DEFAULT_ENHANCE_MODEL);

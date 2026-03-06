@@ -66,7 +66,7 @@ Optional (deployment and token compatibility):
 - `GOOGLE_ADS_ORIG_CLIENT_SECRET`
 - `GOOGLE_ADS_REFRESH_TOKEN` (for `/api/auth/dev-login`)
 - `GOOGLE_ADS_CUSTOMER_ID` (for `/api/auth/dev-login`)
-- `OPENROUTER_ENHANCE_MODEL` (default: `google/gemini-2.5-pro`, used for AI enhancement phases)
+- `OPENROUTER_ENHANCE_MODEL` (default: `google/gemini-3.1-pro-preview`, used for AI enhancement phases)
 
 User-provided in app:
 
