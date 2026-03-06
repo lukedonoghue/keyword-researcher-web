@@ -97,7 +97,7 @@ export function buildCampaignStrategyDefaults(): CampaignStrategy {
     minVolume: 50,
     maxCpc: null,
     minAdGroupKeywords: 3,
-    maxAdGroupKeywords: 20,
+    maxAdGroupKeywords: 10,
     focusHighIntent: true,
     includeInformational: false,
     includeNegativeCandidates: false,

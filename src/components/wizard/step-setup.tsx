@@ -154,7 +154,7 @@ export function StepSetup() {
 
       {/* Continue button */}
       <div className="space-y-1.5">
-        <Button onClick={handleNext} disabled={!canProceed} size="sm" className="h-8">
+        <Button variant="brand" onClick={handleNext} disabled={!canProceed} size="sm" className="h-8">
           Continue
         </Button>
         {!canProceed && (

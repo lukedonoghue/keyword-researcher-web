@@ -64,7 +64,7 @@ const initialStrategy: CampaignStrategy = {
   minVolume: 10,
   maxCpc: null,
   minAdGroupKeywords: 3,
-  maxAdGroupKeywords: 20,
+  maxAdGroupKeywords: 10,
   focusHighIntent: false,
   includeInformational: false,
   includeNegativeCandidates: false,

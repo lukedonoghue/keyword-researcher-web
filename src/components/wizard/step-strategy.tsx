@@ -69,14 +69,22 @@ export function StepStrategy() {
       <div className="grid grid-cols-3 gap-3">
         {presets.map((preset) => {
           const Icon = preset.icon;
+          const isMatch =
+            strategy.monthlyBudget === preset.values.monthlyBudget &&
+            strategy.focusHighIntent === preset.values.focusHighIntent &&
+            strategy.includeInformational === preset.values.includeInformational;
           return (
             <button
               key={preset.label}
               type="button"
               onClick={() => update(preset.values)}
-              className="flex flex-col items-start gap-1 rounded-lg border p-3 text-left transition-colors hover:bg-muted/50"
+              className={`flex flex-col items-start gap-1 rounded-lg p-3 text-left transition-colors ${
+                isMatch
+                  ? 'border-2 border-brand-accent bg-brand-accent/5 shadow-sm dark:bg-brand-accent/10'
+                  : 'border border-border hover:border-muted-foreground/30 hover:bg-muted/30'
+              }`}
             >
-              <Icon className="h-4 w-4 text-muted-foreground" />
+              <Icon className={`h-4 w-4 ${isMatch ? 'text-brand-accent' : 'text-muted-foreground'}`} />
               <span className="text-xs font-medium">{preset.label}</span>
               <span className="text-[11px] text-muted-foreground">{preset.description}</span>
             </button>
@@ -175,6 +183,9 @@ export function StepStrategy() {
               <p className="text-[11px] text-muted-foreground">Keywords per ad group</p>
             </div>
           </div>
+          <p className="text-[11px] text-muted-foreground mt-2">
+            5–10 keywords per ad group is recommended to start. Each keyword generates both Exact and Phrase match entries.
+          </p>
         </CardContent>
       </Card>
 
@@ -204,7 +215,7 @@ export function StepStrategy() {
         <Button variant="outline" size="sm" className="h-8" onClick={() => dispatch({ type: 'SET_STEP', step: 'geo' })}>
           Back
         </Button>
-        <Button size="sm" className="h-8" onClick={handleNext}>
+        <Button variant="brand" size="sm" className="h-8" onClick={handleNext}>
           Start Research
         </Button>
       </div>

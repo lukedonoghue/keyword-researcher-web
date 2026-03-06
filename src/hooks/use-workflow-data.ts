@@ -5,10 +5,18 @@ import { useWorkflow, type WizardStep } from '@/providers/workflow-provider';
 import { useAuth } from '@/providers/auth-provider';
 import type { SeedKeyword, SuppressedKeyword } from '@/lib/types/index';
 import type { CampaignStructureV2 } from '@/lib/types/index';
-import type { ServiceArea } from '@/lib/types/geo';
+import type { ServiceArea, GeoLocationSuggestion } from '@/lib/types/geo';
 import { getErrorMessage } from '@/lib/utils';
+import { mergeKeywordsWithGoogleAdsAuthority } from '@/lib/logic/keyword-merge';
+import { enrichSeedKeywordsWithSignals, applyStrategyFilter } from '@/lib/logic/strategy-filter';
 
 type ErrorResponse = { error?: string };
+
+type GeoOverride = {
+  geoTargets: GeoLocationSuggestion[];
+  geoTargetId: string;
+  geoDisplayName: string;
+};
 
 type DiscoverServicesResponse = {
   businessName: string;
@@ -145,7 +153,7 @@ export function useWorkflowData() {
     }
   }, [dispatch, openrouterApiKey]);
 
-  const researchKeywords = useCallback(async (onPhase?: (phase: 'competitors' | 'google') => void): Promise<ResearchKeywordsResult> => {
+  const researchKeywords = useCallback(async (onPhase?: (phase: 'competitors' | 'google') => void, geoOverrides?: GeoOverride): Promise<ResearchKeywordsResult> => {
     dispatch({ type: 'SET_PROCESSING', isProcessing: true });
     dispatch({ type: 'SET_ERROR', error: null });
     try {
@@ -159,7 +167,7 @@ export function useWorkflowData() {
         body: JSON.stringify({
           targetUrl: state.targetUrl,
           services: state.selectedServices,
-          location: state.geoDisplayName,
+          location: geoOverrides?.geoDisplayName ?? state.geoDisplayName,
           openrouterApiKey,
         }),
       });
@@ -228,9 +236,11 @@ export function useWorkflowData() {
           ...topCities.map(city => `${service} ${city}`),
         ].filter(Boolean);
 
-        const geoTargetIds = state.geoTargets.length > 0
-          ? state.geoTargets.map(t => t.id)
-          : [state.geoTargetId];
+        const effectiveGeoTargets = geoOverrides?.geoTargets ?? state.geoTargets;
+        const effectiveGeoTargetId = geoOverrides?.geoTargetId ?? state.geoTargetId;
+        const geoTargetIds = effectiveGeoTargets.length > 0
+          ? effectiveGeoTargets.map(t => t.id)
+          : [effectiveGeoTargetId];
 
         try {
           const googleRes = await fetch('/api/google-ads/keywords', {
@@ -364,7 +374,7 @@ export function useWorkflowData() {
     }
   }, [dispatch, state, openrouterApiKey]);
 
-  const buildCampaign = useCallback(async (keywords: SeedKeyword[]) => {
+  const buildCampaign = useCallback(async (keywords: SeedKeyword[], overrides?: { allSeedKeywords?: SeedKeyword[]; competitorNames?: string[] }) => {
     dispatch({ type: 'SET_PROCESSING', isProcessing: true });
     dispatch({ type: 'SET_ERROR', error: null });
     try {
@@ -384,7 +394,7 @@ export function useWorkflowData() {
         intent: kw.intent,
       }));
       // Include all seed keywords so the API can compute negative keywords
-      const allKeywordMetrics = state.seedKeywords.map((kw) => ({
+      const allKeywordMetrics = (overrides?.allSeedKeywords ?? state.seedKeywords).map((kw) => ({
         text: kw.text,
         volume: kw.volume,
         cpc: kw.cpc,
@@ -396,7 +406,7 @@ export function useWorkflowData() {
           services,
           keywords: keywordMetrics,
           allKeywords: allKeywordMetrics,
-          competitorNames: state.competitorNames,
+          competitorNames: overrides?.competitorNames ?? state.competitorNames,
           options: {
             minAdGroupKeywords: state.strategy.minAdGroupKeywords,
             maxAdGroupKeywords: state.strategy.maxAdGroupKeywords,
@@ -442,6 +452,41 @@ export function useWorkflowData() {
     URL.revokeObjectURL(url);
   }, [state.campaigns, state.targetUrl, state.negativeKeywords]);
 
+  type RerunPhase = 'competitors' | 'google' | 'merging' | 'filtering' | 'enhancing' | 'building';
+
+  const rerunPipeline = useCallback(async (
+    onPhase?: (phase: RerunPhase) => void,
+    geoOverrides?: GeoOverride,
+  ) => {
+    // Phase 1-2: Research keywords (Perplexity + Google Ads)
+    const { keywords, competitorNames } = await researchKeywords(onPhase, geoOverrides);
+
+    // Phase 3: Merge
+    onPhase?.('merging');
+    const merged = mergeKeywordsWithGoogleAdsAuthority([keywords]);
+    dispatch({ type: 'SET_SEED_KEYWORDS', keywords: merged });
+
+    // Phase 4: Filter
+    onPhase?.('filtering');
+    const enriched = enrichSeedKeywordsWithSignals(merged);
+    const { selected, suppressed } = applyStrategyFilter(enriched, state.strategy, competitorNames);
+    dispatch({ type: 'SET_FILTERED_KEYWORDS', selected, suppressed });
+
+    // Phase 5: Enhance (skip if no OpenRouter API key)
+    let keywordsForBuild = selected;
+    if (openrouterApiKey) {
+      onPhase?.('enhancing');
+      const enhanced = await enhanceKeywords(selected, suppressed);
+      if (enhanced && enhanced.keywords.length > 0) {
+        keywordsForBuild = enhanced.keywords;
+      }
+    }
+
+    // Phase 6: Build campaign — pass fresh keywords + competitor names to avoid stale state
+    onPhase?.('building');
+    await buildCampaign(keywordsForBuild, { allSeedKeywords: merged, competitorNames });
+  }, [researchKeywords, enhanceKeywords, buildCampaign, dispatch, state.strategy, openrouterApiKey]);
+
   return {
     ...state,
     goToStep,
@@ -450,6 +495,7 @@ export function useWorkflowData() {
     enhanceKeywords,
     buildCampaign,
     exportCsv,
+    rerunPipeline,
     dispatch,
   };
 }

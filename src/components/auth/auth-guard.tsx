@@ -8,8 +8,9 @@ export function AuthGuard({ children }: { children: ReactNode }) {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-20">
-        <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+      <div className="flex flex-col items-center justify-center gap-3 py-24">
+        <div className="h-6 w-6 animate-spin rounded-full border-2 border-brand-accent border-t-transparent" />
+        <span className="text-xs text-muted-foreground">Loading...</span>
       </div>
     );
   }

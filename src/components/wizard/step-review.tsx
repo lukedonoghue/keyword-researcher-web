@@ -10,8 +10,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
-import { Search, X, ChevronUp, ChevronDown, ChevronRight } from 'lucide-react';
-import { calculateRecommendedBudget } from '@/lib/logic/budget-calculator';
+import { Search, SearchX, X, ChevronUp, ChevronDown, ChevronRight } from 'lucide-react';
+import { calculateBudgetTiers } from '@/lib/logic/budget-calculator';
 
 const intentColors: Record<string, string> = {
   transactional: 'bg-green-100 text-green-800 border-green-200 dark:bg-green-950 dark:text-green-300 dark:border-green-800',
@@ -174,7 +174,10 @@ export function StepReview() {
   const stats = useMemo(() => {
     const list = cpcFilteredKeywords;
     const count = list.length;
-    const budget = calculateRecommendedBudget(list);
+    const budgetTiers = calculateBudgetTiers(list);
+    const conservative = budgetTiers.tiers.find((t) => t.name === 'conservative');
+    const balanced = budgetTiers.tiers.find((t) => t.name === 'balanced');
+    const aggressive = budgetTiers.tiers.find((t) => t.name === 'aggressive');
 
     // Intent breakdown
     const intentCounts: Record<string, number> = {};
@@ -192,7 +195,15 @@ export function StepReview() {
     }
     const dominantPct = count > 0 ? Math.round((dominantCount / count) * 100) : 0;
 
-    return { count, avgCpc: budget.avgCpc, recommendedDaily: budget.recommendedDaily, recommendedMonthly: budget.recommendedMonthly, dominantIntent, dominantPct };
+    return {
+      count,
+      avgCpc: budgetTiers.avgCpc,
+      conservativeDaily: conservative?.dailyBudget ?? 0,
+      balancedDaily: balanced?.dailyBudget ?? 0,
+      aggressiveDaily: aggressive?.dailyBudget ?? 0,
+      dominantIntent,
+      dominantPct,
+    };
   }, [cpcFilteredKeywords]);
 
   const handleNext = () => {
@@ -242,40 +253,44 @@ export function StepReview() {
           >
             Back
           </Button>
-          <Button size="sm" className="h-8" onClick={handleNext}>
+          <Button variant="brand" size="sm" className="h-8" onClick={handleNext}>
             Build Campaign
           </Button>
         </div>
       </div>
 
       {/* Summary stats bar */}
-      <div className="grid grid-cols-4 gap-2">
-        <Card>
+      <div className="grid grid-cols-4 gap-3">
+        <Card className="relative overflow-hidden">
           <CardContent className="p-3">
             <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Keywords</p>
-            <p className="text-lg font-semibold tabular-nums">{stats.count.toLocaleString()}</p>
+            <p className="text-2xl font-semibold tabular-nums">{stats.count.toLocaleString()}</p>
+            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-brand-accent" />
           </CardContent>
         </Card>
-        <Card>
+        <Card className="relative overflow-hidden">
           <CardContent className="p-3">
             <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Avg CPC</p>
-            <p className="text-lg font-semibold tabular-nums">${stats.avgCpc.toFixed(2)}</p>
+            <p className="text-2xl font-semibold tabular-nums">${stats.avgCpc.toFixed(2)}</p>
+            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-brand-accent" />
           </CardContent>
         </Card>
-        <Card>
+        <Card className="relative overflow-hidden">
           <CardContent className="p-3">
             <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Recommended Budget</p>
-            <p className="text-lg font-semibold tabular-nums">${stats.recommendedDaily.toFixed(0)}/day</p>
-            <p className="text-[10px] text-muted-foreground tabular-nums">${stats.recommendedMonthly.toFixed(0)}/mo for 20 clicks/day</p>
+            <p className="text-2xl font-semibold tabular-nums">${Math.round(stats.conservativeDaily)}&ndash;${Math.round(stats.aggressiveDaily)}/day</p>
+            <p className="text-[10px] text-muted-foreground tabular-nums">Recommended: ${Math.round(stats.balancedDaily)}/day (20 clicks)</p>
+            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-brand-accent" />
           </CardContent>
         </Card>
-        <Card>
+        <Card className="relative overflow-hidden">
           <CardContent className="p-3">
             <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Top Intent</p>
-            <p className="text-lg font-semibold">
+            <p className="text-2xl font-semibold">
               <span className="text-sm">{stats.dominantPct}%</span>{' '}
               <span className="text-xs font-normal text-muted-foreground capitalize">{stats.dominantIntent}</span>
             </p>
+            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-brand-accent" />
           </CardContent>
         </Card>
       </div>
@@ -431,8 +446,11 @@ export function StepReview() {
                 ))}
                 {filteredKeywords.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={7} className="text-center py-8 text-xs text-muted-foreground">
-                      No keywords match the current filters.
+                    <TableCell colSpan={7} className="text-center py-8">
+                      <div className="flex flex-col items-center gap-2">
+                        <SearchX className="h-8 w-8 text-muted-foreground/40" />
+                        <p className="text-xs text-muted-foreground">No keywords match the current filters.</p>
+                      </div>
                     </TableCell>
                   </TableRow>
                 )}

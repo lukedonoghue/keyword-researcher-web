@@ -91,7 +91,7 @@ function hasNegativeSignal(text: string, competitorNames: string[] = []): boolea
 
 export class CampaignBuilder {
   private static readonly DEFAULT_MIN_AD_GROUP_KEYWORDS = 3;
-  private static readonly DEFAULT_MAX_AD_GROUP_KEYWORDS = 20;
+  private static readonly DEFAULT_MAX_AD_GROUP_KEYWORDS = 10;
 
   static build(
     services: ServiceInput[],

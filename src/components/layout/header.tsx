@@ -33,8 +33,8 @@ export function Header() {
   }, []);
 
   return (
-    <header className="border-b border-border bg-card">
-      <div className="mx-auto flex h-12 max-w-6xl items-center justify-between px-4">
+    <header className="border-b border-border bg-card shadow-[0_1px_3px_0_rgb(0,0,0,0.03)] dark:shadow-[0_1px_6px_0_rgb(0,0,0,0.15)]">
+      <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4">
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2">
             <Image
@@ -56,7 +56,7 @@ export function Header() {
           )}
         </div>
         <div className="flex items-center gap-2">
-          <span className="rounded bg-amber-300 px-2 py-0.5 text-[11px] font-bold text-black ring-1 ring-black/70">
+          <span className="rounded bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
             BUILD {buildLabel}
           </span>
           <Button variant="ghost" size="sm" onClick={toggleTheme} className="h-7 w-7 p-0">

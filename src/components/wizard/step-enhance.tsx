@@ -8,6 +8,7 @@ import { Progress } from '@/components/ui/progress';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { AlertCircle } from 'lucide-react';
 import type { KeywordIntent } from '@/lib/types/index';
 import { PhaseRow } from './phase-row';
 
@@ -101,7 +102,7 @@ export function StepEnhance() {
       </Card>
 
       {phase === 'done' && state.enhancedKeywords.length > 0 && (
-        <Card className="border-green-200 bg-green-50 dark:border-green-900 dark:bg-green-950/30">
+        <Card className="border-green-200 bg-green-50 dark:border-green-800/60 dark:bg-green-950/40 dark:card-glow-success">
           <CardContent className="py-5 space-y-4">
             <p className="text-sm font-medium text-green-800 dark:text-green-200">
               AI classified {state.enhancedKeywords.length} keywords by intent, scored quality, and clustered themes.
@@ -148,6 +149,7 @@ export function StepEnhance() {
             )}
 
             <Button
+              variant="brand"
               size="sm"
               className="w-full h-9"
               onClick={() => dispatch({ type: 'SET_STEP', step: 'review' })}
@@ -159,9 +161,12 @@ export function StepEnhance() {
       )}
 
       {error && (
-        <Card className="border-destructive">
+        <Card className="border-destructive/50 bg-destructive/5">
           <CardContent className="py-3">
-            <p className="text-xs text-destructive">{error}</p>
+            <div className="flex items-start gap-2">
+              <AlertCircle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
+              <p className="text-xs text-destructive">{error}</p>
+            </div>
             <Button variant="outline" size="sm" className="mt-2 h-7 text-xs" onClick={() => void runEnhance(true)}>
               Retry
             </Button>
@@ -191,6 +196,7 @@ export function StepEnhance() {
         )}
         {phase === 'done' && (
           <Button
+            variant="brand"
             size="sm"
             className="h-8"
             onClick={() => dispatch({ type: 'SET_STEP', step: 'review' })}

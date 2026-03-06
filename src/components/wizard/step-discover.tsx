@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Badge } from '@/components/ui/badge';
-import { Wrench } from 'lucide-react';
+import { Wrench, AlertCircle } from 'lucide-react';
 
 const BUSINESS_TYPE_LABELS: Record<string, string> = {
   local_service: 'Local Service',
@@ -118,9 +118,12 @@ export function StepDiscover() {
       )}
 
       {error && (
-          <Card className="border-destructive">
+          <Card className="border-destructive/50 bg-destructive/5">
             <CardContent className="py-3">
-              <p className="text-xs text-destructive">{error}</p>
+              <div className="flex items-start gap-2">
+                <AlertCircle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
+                <p className="text-xs text-destructive">{error}</p>
+              </div>
               <Button variant="outline" size="sm" className="mt-2 h-7 text-xs" onClick={handleRetry}>
                 Retry
               </Button>
@@ -199,7 +202,8 @@ export function StepDiscover() {
             {state.discoveredServices.map((service) => (
               <Card
                 key={service.name}
-                className={`cursor-pointer transition-colors ${effectiveSelection.has(service.name) ? 'border-primary' : ''}`}
+                data-interactive
+                className={`cursor-pointer transition-colors ${effectiveSelection.has(service.name) ? 'border-brand-accent shadow-sm shadow-brand-accent/10' : ''}`}
                 onClick={() => toggle(service.name)}
               >
                 <CardContent className="flex items-start gap-3 py-3">
@@ -227,7 +231,7 @@ export function StepDiscover() {
             <Button variant="outline" size="sm" className="h-8" onClick={() => dispatch({ type: 'SET_STEP', step: 'setup' })}>
               Back
             </Button>
-            <Button size="sm" className="h-8" onClick={handleNext} disabled={effectiveSelection.size === 0}>
+            <Button variant="brand" size="sm" className="h-8" onClick={handleNext} disabled={effectiveSelection.size === 0}>
               Continue with {effectiveSelection.size} service{effectiveSelection.size !== 1 ? 's' : ''}
             </Button>
           </div>

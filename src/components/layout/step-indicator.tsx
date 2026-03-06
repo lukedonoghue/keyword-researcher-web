@@ -27,7 +27,7 @@ export function StepIndicator() {
 
   return (
     <div className="border-b border-border bg-card">
-      <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-2">
+      <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
         {WIZARD_STEPS.map((step, idx) => {
           const isActive = idx === currentIdx;
           const isCompleted = idx < currentIdx;
@@ -38,8 +38,8 @@ export function StepIndicator() {
               {idx > 0 && (
                 <div
                   className={cn(
-                    'h-px w-3 sm:w-5 mx-0.5 sm:mx-1',
-                    isCompleted ? 'bg-primary' : 'bg-border',
+                    'h-0.5 w-4 sm:w-8 mx-0.5 sm:mx-1',
+                    isCompleted ? 'bg-brand-accent' : 'bg-border',
                   )}
                 />
               )}
@@ -48,9 +48,9 @@ export function StepIndicator() {
                   <div className="flex items-center gap-1 cursor-default">
                     <div
                       className={cn(
-                        'flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-medium transition-all shrink-0',
-                        isActive && 'bg-primary text-primary-foreground ring-2 ring-[var(--brand-accent)] ring-offset-1 ring-offset-background',
-                        isCompleted && 'bg-primary text-primary-foreground',
+                        'flex h-7 w-7 items-center justify-center rounded-full text-xs font-semibold transition-all shrink-0',
+                        isActive && 'bg-brand-accent text-brand-accent-foreground ring-2 ring-brand-accent/30 ring-offset-2 ring-offset-background',
+                        isCompleted && 'bg-brand-accent text-brand-accent-foreground',
                         isFuture && 'border border-border text-muted-foreground'
                       )}
                     >
@@ -64,8 +64,8 @@ export function StepIndicator() {
                     </div>
                     <span
                       className={cn(
-                        'text-[11px] whitespace-nowrap leading-tight hidden sm:inline',
-                        isActive && 'font-medium text-foreground',
+                        'text-[11px] whitespace-nowrap leading-tight',
+                        isActive ? 'font-semibold text-foreground' : 'hidden sm:inline',
                         isCompleted && 'text-foreground',
                         isFuture && 'text-muted-foreground'
                       )}

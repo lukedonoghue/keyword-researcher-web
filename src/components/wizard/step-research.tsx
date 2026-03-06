@@ -9,7 +9,8 @@ import { Progress } from '@/components/ui/progress';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { enrichSeedKeywordsWithSignals, applyStrategyFilter } from '@/lib/logic/strategy-filter';
 import { mergeKeywordsWithGoogleAdsAuthority } from '@/lib/logic/keyword-merge';
-import { calculateRecommendedBudget } from '@/lib/logic/budget-calculator';
+import { calculateBudgetTiers } from '@/lib/logic/budget-calculator';
+import { AlertCircle } from 'lucide-react';
 import { PhaseRow } from './phase-row';
 
 type CpcStageStats = { count: number; distinctCpcs: number; cpcRange: [number, number] };
@@ -131,9 +132,12 @@ export function StepResearch() {
       </Card>
 
       {phase === 'done' && state.selectedKeywords.length > 0 && (() => {
-        const budget = calculateRecommendedBudget(state.selectedKeywords);
+        const budgetTiers = calculateBudgetTiers(state.selectedKeywords);
+        const conservative = budgetTiers.tiers.find((t) => t.name === 'conservative')!;
+        const balanced = budgetTiers.tiers.find((t) => t.name === 'balanced')!;
+        const aggressive = budgetTiers.tiers.find((t) => t.name === 'aggressive')!;
         return (
-          <Card className="border-green-200 bg-green-50 dark:border-green-900 dark:bg-green-950/30">
+          <Card className="border-green-200 bg-green-50 dark:border-green-800/60 dark:bg-green-950/40 dark:card-glow-success">
             <CardContent className="py-5 space-y-4">
               <p className="text-sm font-medium text-green-800 dark:text-green-200">
                 Found {state.seedKeywords.length} keywords. {state.selectedKeywords.length} passed your strategy filters.
@@ -185,20 +189,25 @@ export function StepResearch() {
                 </div>
               )}
 
-              {budget.avgCpc > 0 && (
+              {budgetTiers.avgCpc > 0 && (
                 <div className="rounded-md border border-green-200 dark:border-green-900 bg-white/60 dark:bg-green-950/40 px-3 py-2.5 space-y-1">
                   <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Budget Insight</p>
                   <p className="text-xs text-green-800 dark:text-green-200">
-                    Average CPC: <span className="font-semibold tabular-nums">${budget.avgCpc.toFixed(2)}</span>
+                    Average CPC: <span className="font-semibold tabular-nums">${budgetTiers.avgCpc.toFixed(2)}</span>
+                    <span className="text-[11px] text-muted-foreground ml-1">({budgetTiers.totalMonthlyVolume.toLocaleString()} monthly searches)</span>
                   </p>
-                  <p className="text-xs text-green-800 dark:text-green-200">
-                    To target 20 clicks/day (~1 conversion/day at 5% CR):
-                    {' '}<span className="font-semibold tabular-nums">${budget.recommendedDaily.toFixed(0)}/day</span>
-                    {' '}(<span className="tabular-nums">${budget.recommendedMonthly.toFixed(0)}/mo</span>)
-                  </p>
-                  <p className="text-[11px] text-muted-foreground">
-                    Total monthly search volume: {budget.totalMonthlyVolume.toLocaleString()}
-                  </p>
+                  <div className="space-y-0.5 mt-1">
+                    <p className="text-xs text-green-800 dark:text-green-200">
+                      Conservative (10 clicks/day): <span className="font-semibold tabular-nums">${Math.round(conservative.dailyBudget)}/day</span> <span className="tabular-nums text-[11px] text-muted-foreground">(${Math.round(conservative.monthlyBudget).toLocaleString()}/mo)</span>
+                    </p>
+                    <p className="text-xs text-green-800 dark:text-green-200">
+                      Balanced (20 clicks/day): <span className="font-semibold tabular-nums">${Math.round(balanced.dailyBudget)}/day</span> <span className="tabular-nums text-[11px] text-muted-foreground">(${Math.round(balanced.monthlyBudget).toLocaleString()}/mo)</span>
+                      <span className="text-[9px] px-1.5 py-0 rounded-full bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300 font-medium ml-1">Recommended</span>
+                    </p>
+                    <p className="text-xs text-green-800 dark:text-green-200">
+                      Aggressive (30 clicks/day): <span className="font-semibold tabular-nums">${Math.round(aggressive.dailyBudget)}/day</span> <span className="tabular-nums text-[11px] text-muted-foreground">(${Math.round(aggressive.monthlyBudget).toLocaleString()}/mo)</span>
+                    </p>
+                  </div>
                 </div>
               )}
 
@@ -241,6 +250,7 @@ export function StepResearch() {
               )}
 
               <Button
+                variant="brand"
                 size="sm"
                 className="w-full h-9"
                 onClick={() => dispatch({ type: 'SET_STEP', step: 'enhance' })}
@@ -253,9 +263,12 @@ export function StepResearch() {
       })()}
 
       {error && (
-        <Card className="border-destructive">
+        <Card className="border-destructive/50 bg-destructive/5">
           <CardContent className="py-3">
-            <p className="text-xs text-destructive">{error}</p>
+            <div className="flex items-start gap-2">
+              <AlertCircle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
+              <p className="text-xs text-destructive">{error}</p>
+            </div>
             <Button variant="outline" size="sm" className="mt-2 h-7 text-xs" onClick={() => void runResearch(true)}>
               Retry
             </Button>
@@ -275,6 +288,7 @@ export function StepResearch() {
         </Button>
         {phase === 'done' && (
           <Button
+            variant="brand"
             size="sm"
             className="h-8"
             onClick={() => dispatch({ type: 'SET_STEP', step: 'enhance' })}

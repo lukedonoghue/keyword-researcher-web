@@ -18,9 +18,15 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Download, Upload, Pencil, FileSpreadsheet, ArrowRight, ChevronRight, Settings2, TableIcon, List, MapPin } from 'lucide-react';
-import { calculateRecommendedBudget, estimatedDailyClicks, estimatedMonthlyConversions } from '@/lib/logic/budget-calculator';
+import { Download, Upload, Pencil, FileSpreadsheet, ArrowRight, ChevronRight, Settings2, TableIcon, List, MapPin, AlertCircle } from 'lucide-react';
+import { Progress } from '@/components/ui/progress';
+import { calculateBudgetTiers, estimatedDailyClicks, estimatedMonthlyConversions } from '@/lib/logic/budget-calculator';
+import { BudgetPlanner } from './budget-planner';
 import { CampaignDataTable } from '@/components/wizard/campaign-data-table';
+import { GeoLocationPicker } from './geo-location-picker';
+import { PhaseRow } from './phase-row';
+import { GEO_CONSTANTS } from '@/lib/data/geoConstants';
+import type { GeoLocationSuggestion } from '@/lib/types/geo';
 import type { CampaignStructureV2, AdGroupPriority } from '@/lib/types/index';
 
 const priorityColors = {
@@ -107,7 +113,7 @@ function getCampaignAvgCpc(campaign: CampaignStructureV2, kwCount: number) {
 
 export function StepCampaign() {
   const { state, dispatch } = useWorkflow();
-  const { buildCampaign, isProcessing, error } = useWorkflowData();
+  const { buildCampaign, rerunPipeline, isProcessing, error } = useWorkflowData();
   const startedRef = useRef(false);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -118,15 +124,64 @@ export function StepCampaign() {
   const [showSettings, setShowSettings] = useState(false);
   const [viewMode, setViewMode] = useState<'table' | 'tree'>('table');
   const [showAdditional, setShowAdditional] = useState(false);
+  const [geoDialogOpen, setGeoDialogOpen] = useState(false);
+  const [rerunPhase, setRerunPhase] = useState<string | null>(null);
+  const [rerunError, setRerunError] = useState<string | null>(null);
 
   const keywordsForBudget = useMemo(
     () => (state.enhancedKeywords.length > 0 ? state.enhancedKeywords : state.selectedKeywords),
     [state.enhancedKeywords, state.selectedKeywords]
   );
-  const budgetRec = useMemo(() => calculateRecommendedBudget(keywordsForBudget), [keywordsForBudget]);
+  const budgetTiers = useMemo(() => calculateBudgetTiers(keywordsForBudget), [keywordsForBudget]);
+  const balancedTier = budgetTiers.tiers.find((t) => t.name === 'balanced');
   const [dailyBudget, setDailyBudget] = useState(() =>
-    budgetRec.recommendedDaily > 0 ? budgetRec.recommendedDaily.toFixed(0) : '50'
+    balancedTier && balancedTier.dailyBudget > 0 ? balancedTier.dailyBudget.toFixed(0) : '50'
   );
+
+  const handleBudgetChange = useCallback((daily: number) => {
+    setDailyBudget(Math.round(daily).toString());
+  }, []);
+
+  const handleGeoChange = useCallback(async (locations: GeoLocationSuggestion[], countryCode: string, languageId: string) => {
+    // Dispatch geo update (auto-resets all downstream state via createDownstreamResearchReset)
+    if (locations.length > 0) {
+      dispatch({ type: 'SET_GEO_TARGETS', targets: locations, languageId });
+    } else {
+      const geo = GEO_CONSTANTS.find((g) => g.countryCode === countryCode);
+      if (geo) {
+        dispatch({
+          type: 'SET_GEO',
+          geoTargetId: geo.geoTargetId,
+          languageId: geo.languageId,
+          countryCode: geo.countryCode,
+          displayName: geo.displayName,
+        });
+      }
+    }
+
+    // Build geo overrides — state won't be updated yet in this tick
+    const geo = GEO_CONSTANTS.find((g) => g.countryCode === countryCode);
+    const geoOverrides = {
+      geoTargets: locations,
+      geoTargetId: geo?.geoTargetId ?? '',
+      geoDisplayName: locations.length > 0
+        ? locations.map((l) => l.name).join(', ')
+        : geo?.displayName ?? '',
+    };
+
+    setGeoDialogOpen(false);
+    setRerunError(null);
+    setRerunPhase('competitors');
+    startedRef.current = true; // prevent auto-build from re-triggering
+
+    try {
+      await rerunPipeline((phase) => setRerunPhase(phase), geoOverrides);
+      setRerunPhase(null);
+    } catch (err) {
+      setRerunError(err instanceof Error ? err.message : 'Pipeline failed');
+      setRerunPhase(null);
+    }
+  }, [dispatch, rerunPipeline]);
 
   const keywordsToBuild = useMemo(
     () => (state.enhancedKeywords.length > 0 ? state.enhancedKeywords : state.selectedKeywords),
@@ -286,10 +341,6 @@ export function StepCampaign() {
     }
   }, [handleFinishEditing]);
 
-  // Spend estimates
-  const estSpendLow = stats.avgCpc * stats.totalVolumeSum * 0.02;
-  const estSpendHigh = stats.avgCpc * stats.totalVolumeSum * 0.05;
-
   return (
     <div className="space-y-4">
       {/* Header */}
@@ -301,6 +352,15 @@ export function StepCampaign() {
               <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-300 font-medium">
                 <MapPin className="h-2.5 w-2.5" />
                 {state.geoDisplayName}
+                <button
+                  type="button"
+                  className="ml-0.5 hover:text-blue-900 dark:hover:text-blue-100 transition-colors"
+                  onClick={() => setGeoDialogOpen(true)}
+                  title="Edit location targeting"
+                  disabled={rerunPhase !== null}
+                >
+                  <Pencil className="h-2.5 w-2.5" />
+                </button>
               </span>
             )}
           </div>
@@ -318,6 +378,49 @@ export function StepCampaign() {
           Back
         </Button>
       </div>
+
+      {/* Re-run Progress */}
+      {rerunPhase && (
+        <Card className="border-brand-accent/30 bg-gradient-to-br from-brand-accent/5 to-transparent">
+          <CardContent className="py-4 px-5 space-y-3">
+            <p className="text-sm font-medium">Re-running research with updated location...</p>
+            <Progress value={
+              rerunPhase === 'competitors' ? 10 :
+              rerunPhase === 'google' ? 30 :
+              rerunPhase === 'merging' ? 50 :
+              rerunPhase === 'filtering' ? 60 :
+              rerunPhase === 'enhancing' ? 75 :
+              rerunPhase === 'building' ? 90 : 0
+            } />
+            <div className="space-y-1">
+              <PhaseRow label="Researching competitors" active={rerunPhase === 'competitors'} done={['google', 'merging', 'filtering', 'enhancing', 'building'].includes(rerunPhase)} />
+              <PhaseRow label="Fetching Google Ads data" active={rerunPhase === 'google'} done={['merging', 'filtering', 'enhancing', 'building'].includes(rerunPhase)} />
+              <PhaseRow label="Merging keywords" active={rerunPhase === 'merging'} done={['filtering', 'enhancing', 'building'].includes(rerunPhase)} />
+              <PhaseRow label="Applying strategy filters" active={rerunPhase === 'filtering'} done={['enhancing', 'building'].includes(rerunPhase)} />
+              <PhaseRow label="AI enhancement" active={rerunPhase === 'enhancing'} done={['building'].includes(rerunPhase)} />
+              <PhaseRow label="Building campaign structure" active={rerunPhase === 'building'} done={false} />
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Re-run Error */}
+      {rerunError && (
+        <Card className="border-destructive/50 bg-destructive/5">
+          <CardContent className="py-3">
+            <div className="flex items-start gap-2">
+              <AlertCircle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
+              <div>
+                <p className="text-xs text-destructive font-medium">Pipeline re-run failed</p>
+                <p className="text-xs text-destructive/80 mt-0.5">{rerunError}</p>
+              </div>
+            </div>
+            <Button variant="outline" size="sm" className="mt-2 h-7 text-xs" onClick={() => { setRerunError(null); setGeoDialogOpen(true); }}>
+              Try Again
+            </Button>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Settings Summary */}
       <Card>
@@ -415,14 +518,11 @@ export function StepCampaign() {
                     </div>
                   </div>
                 )}
-                {/* Estimated monthly spend range */}
+                {/* CPC & volume summary */}
                 <div className="rounded-md bg-muted/50 px-3 py-2.5">
-                  <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Est. Monthly Spend Range</p>
+                  <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-0.5">Market Data</p>
                   <p className="text-sm font-semibold tabular-nums">
-                    ${estSpendLow.toLocaleString(undefined, { maximumFractionDigits: 0 })} &ndash; ${estSpendHigh.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                  </p>
-                  <p className="text-[10px] text-muted-foreground mt-0.5">
-                    Based on avg CPC of ${stats.avgCpc.toFixed(2)} across {stats.totalVolumeSum.toLocaleString()} monthly search volume
+                    Avg CPC: ${stats.avgCpc.toFixed(2)} <span className="text-xs font-normal text-muted-foreground">across {stats.totalVolumeSum.toLocaleString()} monthly searches</span>
                   </p>
                 </div>
               </div>
@@ -464,6 +564,15 @@ export function StepCampaign() {
         </Card>
       )}
 
+      {/* Budget Planner */}
+      {state.campaigns.length > 0 && budgetTiers.avgCpc > 0 && (
+        <BudgetPlanner
+          avgCpc={budgetTiers.avgCpc}
+          initialDailyBudget={balancedTier?.dailyBudget ?? 50}
+          onBudgetChange={handleBudgetChange}
+        />
+      )}
+
       {/* Processing state */}
       {isProcessing && (
         <Card>
@@ -476,9 +585,12 @@ export function StepCampaign() {
 
       {/* Error state */}
       {error && (
-        <Card className="border-destructive">
+        <Card className="border-destructive/50 bg-destructive/5">
           <CardContent className="py-3">
-            <p className="text-xs text-destructive">{error}</p>
+            <div className="flex items-start gap-2">
+              <AlertCircle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
+              <p className="text-xs text-destructive">{error}</p>
+            </div>
             <Button variant="outline" size="sm" className="mt-2 h-7 text-xs" onClick={() => void runBuild(true)}>
               Retry
             </Button>
@@ -751,11 +863,11 @@ export function StepCampaign() {
         <div className="space-y-3">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {/* Card 1: Download for Google Ads Editor */}
-            <Card className="border-2 hover:border-primary/50 transition-colors">
+            <Card className="border-2 border-brand-accent/30 bg-gradient-to-br from-brand-accent/5 to-transparent hover:border-brand-accent/50 transition-colors">
               <CardContent className="py-5 px-5 flex flex-col gap-3">
                 <div className="flex items-start gap-3">
-                  <div className="rounded-md bg-primary/10 p-2 shrink-0">
-                    <FileSpreadsheet className="h-5 w-5 text-primary" />
+                  <div className="rounded-md bg-brand-accent/15 p-2 shrink-0">
+                    <FileSpreadsheet className="h-5 w-5 text-brand-accent" />
                   </div>
                   <div className="min-w-0">
                     <p className="text-sm font-semibold">Download for Google Ads Editor</p>
@@ -764,7 +876,7 @@ export function StepCampaign() {
                     </p>
                   </div>
                 </div>
-                <Button size="sm" className="w-full" onClick={handleExportGoogleAds}>
+                <Button variant="brand" size="sm" className="w-full" onClick={handleExportGoogleAds}>
                   <Download className="h-3.5 w-3.5 mr-1.5" />
                   Download CSV
                 </Button>
@@ -862,11 +974,11 @@ export function StepCampaign() {
                 Estimated monthly spend: ${(parseFloat(dailyBudget || '0') * 30.4).toFixed(0)}/mo
               </p>
             </div>
-            {budgetRec.avgCpc > 0 && (
+            {budgetTiers.avgCpc > 0 && (
               <div className="rounded-md bg-muted/50 px-3 py-2 space-y-0.5">
                 <p className="text-[11px] text-muted-foreground">
-                  Avg CPC: ${budgetRec.avgCpc.toFixed(2)} &bull; ~{estimatedDailyClicks(parseFloat(dailyBudget || '0'), budgetRec.avgCpc).toFixed(0)} clicks/day
-                  &bull; ~{estimatedMonthlyConversions(parseFloat(dailyBudget || '0'), budgetRec.avgCpc).toFixed(1)} conversions/mo at 5% CR
+                  Avg CPC: ${budgetTiers.avgCpc.toFixed(2)} &bull; ~{estimatedDailyClicks(parseFloat(dailyBudget || '0'), budgetTiers.avgCpc).toFixed(0)} clicks/day
+                  &bull; ~{estimatedMonthlyConversions(parseFloat(dailyBudget || '0'), budgetTiers.avgCpc).toFixed(1)} conversions/mo at 5% CR
                 </p>
               </div>
             )}
@@ -894,6 +1006,26 @@ export function StepCampaign() {
               )}
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Location Dialog */}
+      <Dialog open={geoDialogOpen} onOpenChange={setGeoDialogOpen}>
+        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Edit Location Targeting</DialogTitle>
+            <DialogDescription>
+              Change your geo targeting. This will re-run the entire research pipeline with updated location data.
+            </DialogDescription>
+          </DialogHeader>
+          <GeoLocationPicker
+            initialCountryCode={state.geoCountryCode}
+            initialLocations={state.geoTargets}
+            detectedServiceArea={state.detectedServiceArea}
+            detectedCountryCode={state.detectedCountryCode}
+            onConfirm={handleGeoChange}
+            onCancel={() => setGeoDialogOpen(false)}
+          />
         </DialogContent>
       </Dialog>
     </div>
