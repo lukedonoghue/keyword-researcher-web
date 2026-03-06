@@ -11,6 +11,8 @@ import { GEO_CONSTANTS } from '@/lib/data/geoConstants';
 import { formatServiceArea } from '@/lib/services/geo-detector';
 import type { GeoLocationSuggestion } from '@/lib/types/geo';
 
+type MatchStatus = 'idle' | 'loading' | 'matched' | 'no-match';
+
 export function StepGeo() {
   const { state, dispatch } = useWorkflow();
   const [manualCountry, setManualCountry] = useState<string | null>(null);
@@ -23,6 +25,15 @@ export function StepGeo() {
   const resultsRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const autoPopulatedRef = useRef(false);
+
+  // Match status tracking for detected cities/states
+  const [matchStatuses, setMatchStatuses] = useState<Record<string, MatchStatus>>({});
+  const [matchResults, setMatchResults] = useState<Record<string, GeoLocationSuggestion>>({});
+  const [autoPopulating, setAutoPopulating] = useState(false);
+  const [autoPopulateProgress, setAutoPopulateProgress] = useState({ done: 0, total: 0 });
+  const [autoPopulateSummary, setAutoPopulateSummary] = useState<{ matched: number; total: number } | null>(null);
+  const [inlineMessage, setInlineMessage] = useState<string | null>(null);
+  const inlineMessageTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   const selectedCountry = useMemo(() => {
     if (manualCountry) return manualCountry;
@@ -54,11 +65,72 @@ export function StepGeo() {
         setShowResults(true);
       }
     } catch {
-      // silently fail
+      // silently fail for manual search
     } finally {
       setIsSearching(false);
     }
   }, []);
+
+  // Reusable helper: search GKP for a location name and return the best match
+  const searchAndMatch = useCallback(async (name: string, countryCode: string): Promise<GeoLocationSuggestion | null> => {
+    try {
+      const res = await fetch('/api/google-ads/geo-search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: name, countryCode }),
+      });
+      if (!res.ok) return null;
+      const data = await res.json() as { locations: GeoLocationSuggestion[] };
+      const locations = Array.isArray(data.locations) ? data.locations : [];
+      return locations.find((l) => l.targetType === 'City') || locations[0] || null;
+    } catch {
+      return null;
+    }
+  }, []);
+
+  // Show an inline message that auto-dismisses
+  const showInlineMessage = useCallback((msg: string) => {
+    if (inlineMessageTimerRef.current) clearTimeout(inlineMessageTimerRef.current);
+    setInlineMessage(msg);
+    inlineMessageTimerRef.current = setTimeout(() => setInlineMessage(null), 5000);
+  }, []);
+
+  // Handle clicking a detected location badge
+  const handleDetectedLocationClick = useCallback(async (name: string) => {
+    const status = matchStatuses[name];
+
+    // If loading, do nothing
+    if (status === 'loading') return;
+
+    // If already matched, toggle selection
+    if (status === 'matched') {
+      const matchedLoc = matchResults[name];
+      if (!matchedLoc) return;
+      const isSelected = selectedLocations.some((l) => l.id === matchedLoc.id);
+      if (isSelected) {
+        setSelectedLocations((prev) => prev.filter((l) => l.id !== matchedLoc.id));
+      } else {
+        setSelectedLocations((prev) => [...prev, matchedLoc]);
+      }
+      return;
+    }
+
+    // If idle or no-match, try searching
+    setMatchStatuses((prev) => ({ ...prev, [name]: 'loading' }));
+    const result = await searchAndMatch(name, selectedCountry);
+    if (result) {
+      setMatchStatuses((prev) => ({ ...prev, [name]: 'matched' }));
+      setMatchResults((prev) => ({ ...prev, [name]: result }));
+      // Add to selected if not already there
+      setSelectedLocations((prev) => {
+        if (prev.some((l) => l.id === result.id)) return prev;
+        return [...prev, result];
+      });
+    } else {
+      setMatchStatuses((prev) => ({ ...prev, [name]: 'no-match' }));
+      showInlineMessage(`"${name}" not found in Google Keyword Planner. Try searching for a broader area.`);
+    }
+  }, [matchStatuses, matchResults, selectedLocations, selectedCountry, searchAndMatch, showInlineMessage]);
 
   // Debounced search
   useEffect(() => {
@@ -76,7 +148,7 @@ export function StepGeo() {
     };
   }, [searchQuery, selectedCountry, searchLocations]);
 
-  // Auto-populate from AI detection
+  // Auto-populate from AI detection with progress tracking
   useEffect(() => {
     if (autoPopulatedRef.current) return;
     if (state.geoTargets.length > 0) {
@@ -85,37 +157,62 @@ export function StepGeo() {
       return;
     }
     const cities = state.detectedServiceArea?.cities ?? [];
-    if (cities.length === 0) return;
-    autoPopulatedRef.current = true;
+    const states = state.detectedServiceArea?.states ?? [];
+    const allNames = [...cities, ...states];
+    if (allNames.length === 0) return;
+
+    let cancelled = false;
 
     async function autoSearch() {
-      const settled = await Promise.allSettled(
-        cities.map(async (city) => {
-          const res = await fetch('/api/google-ads/geo-search', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ query: city, countryCode: selectedCountry }),
-          });
-          if (!res.ok) return null;
-          const data = await res.json() as { locations: GeoLocationSuggestion[] };
-          const locations = Array.isArray(data.locations) ? data.locations : [];
-          return locations.find((l) => l.targetType === 'City') || locations[0] || null;
-        })
-      );
+      setAutoPopulating(true);
+      setAutoPopulateProgress({ done: 0, total: allNames.length });
+      setAutoPopulateSummary(null);
+
       const seen = new Set<string>();
       const results: GeoLocationSuggestion[] = [];
-      for (const r of settled) {
-        if (r.status === 'fulfilled' && r.value && !seen.has(r.value.id)) {
-          seen.add(r.value.id);
-          results.push(r.value);
+      let matchedCount = 0;
+      let doneCount = 0;
+
+      // Process sequentially to show progress and avoid overwhelming the API
+      for (const name of allNames) {
+        if (cancelled) return;
+
+        setMatchStatuses((prev) => ({ ...prev, [name]: 'loading' }));
+
+        const result = await searchAndMatch(name, selectedCountry);
+        doneCount++;
+
+        if (cancelled) return;
+
+        if (result) {
+          setMatchStatuses((prev) => ({ ...prev, [name]: 'matched' }));
+          setMatchResults((prev) => ({ ...prev, [name]: result }));
+          if (!seen.has(result.id)) {
+            seen.add(result.id);
+            results.push(result);
+          }
+          matchedCount++;
+        } else {
+          setMatchStatuses((prev) => ({ ...prev, [name]: 'no-match' }));
         }
+
+        setAutoPopulateProgress({ done: doneCount, total: allNames.length });
       }
+
+      if (cancelled) return;
+
       if (results.length > 0) {
         setSelectedLocations(results);
       }
+      setAutoPopulating(false);
+      setAutoPopulateSummary({ matched: matchedCount, total: allNames.length });
+      autoPopulatedRef.current = true;
     }
+
     void autoSearch();
-  }, [state.detectedServiceArea?.cities, state.geoTargets, selectedCountry]);
+
+    return () => { cancelled = true; };
+  }, [state.detectedServiceArea?.cities, state.detectedServiceArea?.states, state.geoTargets, selectedCountry, searchAndMatch]);
 
   // Close results dropdown on outside click
   useEffect(() => {
@@ -216,28 +313,69 @@ export function StepGeo() {
               {formatServiceArea(state.detectedServiceArea)}
             </p>
             {!state.detectedServiceArea.isNationwide && (
-              <div className="space-y-1">
+              <div className="space-y-1.5">
                 {state.detectedServiceArea.cities.length > 0 && (
-                  <div className="flex flex-wrap gap-1">
+                  <div className="flex flex-wrap gap-1 items-center">
                     <span className="text-[10px] text-muted-foreground mr-1">Cities:</span>
                     {state.detectedServiceArea.cities.map((city) => (
-                      <Badge key={city} variant="outline" className="text-[10px] px-1.5 py-0">
-                        {city}
-                      </Badge>
+                      <DetectedBadge
+                        key={city}
+                        name={city}
+                        status={matchStatuses[city] || 'idle'}
+                        isSelected={
+                          matchStatuses[city] === 'matched' && matchResults[city]
+                            ? selectedLocations.some((l) => l.id === matchResults[city].id)
+                            : false
+                        }
+                        onClick={() => handleDetectedLocationClick(city)}
+                      />
                     ))}
                   </div>
                 )}
                 {state.detectedServiceArea.states.length > 0 && (
-                  <div className="flex flex-wrap gap-1">
+                  <div className="flex flex-wrap gap-1 items-center">
                     <span className="text-[10px] text-muted-foreground mr-1">States:</span>
                     {state.detectedServiceArea.states.map((st) => (
-                      <Badge key={st} variant="outline" className="text-[10px] px-1.5 py-0">
-                        {st}
-                      </Badge>
+                      <DetectedBadge
+                        key={st}
+                        name={st}
+                        status={matchStatuses[st] || 'idle'}
+                        isSelected={
+                          matchStatuses[st] === 'matched' && matchResults[st]
+                            ? selectedLocations.some((l) => l.id === matchResults[st].id)
+                            : false
+                        }
+                        onClick={() => handleDetectedLocationClick(st)}
+                      />
                     ))}
                   </div>
                 )}
               </div>
+            )}
+
+            {/* Auto-populate progress */}
+            {autoPopulating && (
+              <div className="flex items-center gap-2 text-[11px] text-muted-foreground pt-1">
+                <div className="h-3 w-3 animate-spin rounded-full border border-primary border-t-transparent shrink-0" />
+                Matching detected locations... ({autoPopulateProgress.done}/{autoPopulateProgress.total})
+              </div>
+            )}
+
+            {/* Auto-populate summary */}
+            {!autoPopulating && autoPopulateSummary && (
+              <p className="text-[11px] text-muted-foreground pt-1">
+                Matched {autoPopulateSummary.matched} of {autoPopulateSummary.total} locations
+                {autoPopulateSummary.total - autoPopulateSummary.matched > 0 && (
+                  <span> &middot; {autoPopulateSummary.total - autoPopulateSummary.matched} not found</span>
+                )}
+              </p>
+            )}
+
+            {/* Inline no-match message */}
+            {inlineMessage && (
+              <p className="text-[11px] text-amber-600 dark:text-amber-400 pt-1">
+                {inlineMessage}
+              </p>
             )}
           </CardContent>
         </Card>
@@ -358,5 +496,82 @@ export function StepGeo() {
         </Button>
       </div>
     </div>
+  );
+}
+
+// Badge component for detected cities/states with match status indicators
+function DetectedBadge({
+  name,
+  status,
+  isSelected,
+  onClick,
+}: {
+  name: string;
+  status: MatchStatus;
+  isSelected: boolean;
+  onClick: () => void;
+}) {
+  if (status === 'loading') {
+    return (
+      <Badge variant="outline" className="text-[10px] px-1.5 py-0 gap-1 opacity-70">
+        <span className="inline-block h-2 w-2 animate-spin rounded-full border border-current border-t-transparent" />
+        {name}
+      </Badge>
+    );
+  }
+
+  if (status === 'matched' && isSelected) {
+    return (
+      <Badge
+        variant="default"
+        className="text-[10px] px-1.5 py-0 gap-1 cursor-pointer bg-green-600 hover:bg-green-700 dark:bg-green-700 dark:hover:bg-green-800"
+        onClick={onClick}
+        title={`Click to remove "${name}" from selected locations`}
+      >
+        <svg className="h-2.5 w-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+        </svg>
+        {name}
+      </Badge>
+    );
+  }
+
+  if (status === 'matched' && !isSelected) {
+    return (
+      <Badge
+        variant="outline"
+        className="text-[10px] px-1.5 py-0 cursor-pointer hover:bg-accent"
+        onClick={onClick}
+        title={`Click to re-add "${name}"`}
+      >
+        {name}
+      </Badge>
+    );
+  }
+
+  if (status === 'no-match') {
+    return (
+      <Badge
+        variant="outline"
+        className="text-[10px] px-1.5 py-0 gap-1 cursor-pointer opacity-50 hover:opacity-75"
+        onClick={onClick}
+        title={`"${name}" not found in Google Keyword Planner. Click to retry.`}
+      >
+        <span className="text-amber-500 font-bold">!</span>
+        {name}
+      </Badge>
+    );
+  }
+
+  // idle
+  return (
+    <Badge
+      variant="outline"
+      className="text-[10px] px-1.5 py-0 cursor-pointer hover:bg-accent"
+      onClick={onClick}
+      title={`Click to search for "${name}" in Google Keyword Planner`}
+    >
+      {name}
+    </Badge>
   );
 }
