@@ -31,6 +31,7 @@ export function StepCompetitors() {
   const { state, dispatch } = useWorkflow();
   const [draftCompetitors, setDraftCompetitors] = useState<string[]>(() => dedupeNames(state.competitorNames));
   const [manualCompetitor, setManualCompetitor] = useState('');
+  const [competitorMode, setCompetitorMode] = useState(state.strategy.competitorCampaignMode);
 
   const competitorKeywordRows = useMemo(() => {
     return state.seedKeywords
@@ -75,14 +76,19 @@ export function StepCompetitors() {
     const nextCompetitors = dedupeNames(draftCompetitors);
     const enriched = enrichSeedKeywordsWithSignals(state.seedKeywords);
     const { selected, suppressed } = applyStrategyFilter(enriched, state.strategy, nextCompetitors);
+    const nextStrategy = {
+      ...state.strategy,
+      competitorCampaignMode: competitorMode,
+    };
 
     dispatch({ type: 'SET_COMPETITOR_NAMES', names: nextCompetitors });
+    dispatch({ type: 'SET_STRATEGY', strategy: nextStrategy });
     dispatch({ type: 'SET_FILTERED_KEYWORDS', selected, suppressed });
     dispatch({ type: 'SET_STEP', step: 'enhance' });
   };
 
   const modeLabel =
-    state.strategy.competitorCampaignMode === 'separate'
+    competitorMode === 'separate'
       ? 'Separate competitor campaign'
       : 'Exclude from standard campaigns';
 
@@ -99,12 +105,44 @@ export function StepCompetitors() {
         <CardContent className="py-5 space-y-3">
           <div className="flex flex-wrap items-center gap-2">
             <Badge variant="outline">Mode</Badge>
-            <span className="text-sm font-medium">{modeLabel}</span>
             <Badge variant="secondary">{draftCompetitors.length} competitors</Badge>
             <Badge variant="secondary">{competitorKeywordRows.length} matched search terms</Badge>
           </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <button
+              type="button"
+              onClick={() => setCompetitorMode('exclude')}
+              className={`rounded-lg border p-3 text-left transition-colors ${
+                competitorMode === 'exclude'
+                  ? 'border-brand-accent bg-brand-accent/5 shadow-sm'
+                  : 'border-border bg-card hover:border-muted-foreground/30'
+              }`}
+            >
+              <p className="text-xs font-medium">Exclude From Standard Campaigns</p>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Recommended default. Competitor terms become negatives so they do not leak into standard service campaigns.
+              </p>
+            </button>
+            <button
+              type="button"
+              onClick={() => setCompetitorMode('separate')}
+              className={`rounded-lg border p-3 text-left transition-colors ${
+                competitorMode === 'separate'
+                  ? 'border-brand-accent bg-brand-accent/5 shadow-sm'
+                  : 'border-border bg-card hover:border-muted-foreground/30'
+              }`}
+            >
+              <p className="text-xs font-medium">Build Competitor Campaign</p>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Standard campaigns still keep competitor negatives, and the build will create a separate competitor-only campaign when search data exists.
+              </p>
+            </button>
+          </div>
           <p className="text-xs text-muted-foreground">
-            Standard campaigns will keep competitor negatives. If competitor mode is enabled in Strategy, the build will also create one ad group per competitor inside a separate competitor campaign.
+            Current selection: <span className="font-medium text-foreground/90">{modeLabel}</span>
+          </p>
+          <p className="text-xs text-muted-foreground">
+            If competitor search terms are thin, exclusions will still be applied cleanly. A separate competitor campaign only becomes substantial when Google Ads research returns usable competitor-branded queries.
           </p>
         </CardContent>
       </Card>

@@ -66,6 +66,31 @@ function chunkStrings(values: string[], size: number): string[][] {
   return chunks;
 }
 
+function mergeKeywordSnapshots(baseKeywords: SeedKeyword[], ...overlays: SeedKeyword[][]): SeedKeyword[] {
+  const merged = new Map<string, SeedKeyword>();
+
+  for (const keyword of baseKeywords) {
+    merged.set(keyword.text.toLowerCase(), { ...keyword });
+  }
+
+  for (const overlay of overlays) {
+    for (const keyword of overlay) {
+      const key = keyword.text.toLowerCase();
+      const existing = merged.get(key);
+      if (!existing) {
+        merged.set(key, { ...keyword });
+        continue;
+      }
+      merged.set(key, {
+        ...existing,
+        ...keyword,
+      });
+    }
+  }
+
+  return Array.from(merged.values());
+}
+
 type GoogleKeywordApi = {
   text?: string;
   volume?: number;
@@ -439,20 +464,22 @@ export function useWorkflowData() {
       onPhase?.('intent');
       const intentKeywords = await runPhase('intent', allKeywords);
 
-      // Phase 2: Theme clustering
+      // Phase 2-3: Theme clustering and quality scoring can run in parallel once intent is known
       onPhase?.('themes');
-      const themesKeywords = await runPhase('themes', intentKeywords);
-
-      // Phase 3: Quality scoring
-      onPhase?.('quality');
-      const qualityKeywords = await runPhase('quality', themesKeywords, { strategy: state.strategy });
+      const themesPromise = runPhase('themes', intentKeywords);
+      const qualityPromise = (async () => {
+        onPhase?.('quality');
+        return runPhase('quality', intentKeywords, { strategy: state.strategy });
+      })();
+      const [themesKeywords, qualityKeywords] = await Promise.all([themesPromise, qualityPromise]);
+      const mergedAiKeywords = mergeKeywordSnapshots(intentKeywords, themesKeywords, qualityKeywords);
 
       // Phase 4: Merge & filter (fast, no AI)
       onPhase?.('merge');
       const mergeRes = await fetch('/api/enhance', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phase: 'merge', keywords: qualityKeywords, strategy: state.strategy }),
+        body: JSON.stringify({ phase: 'merge', keywords: mergedAiKeywords, strategy: state.strategy }),
       });
       if (!mergeRes.ok) throw new Error(await getApiErrorMessage(mergeRes, 'Failed to merge keywords'));
       const mergeData = await mergeRes.json() as EnhanceMergeResponse;

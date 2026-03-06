@@ -10,13 +10,14 @@ import { getKeywordQualityScore } from './quality-score';
 import { dedupeSeedKeywords } from './keyword-merge';
 import { analyzeKeywordSignals, isOwnerStyleQuery, normalizeKeywordText } from './keyword-signals';
 
-const BATCH_SIZE = 80;
+const BATCH_SIZE = 40;
 const MAX_CONCURRENT_BATCHES = 4;
 const DEFAULT_ENHANCE_MODEL = process.env.OPENROUTER_ENHANCE_MODEL?.trim() || 'google/gemini-3-flash-preview';
 const AI_REVIEW_TEMPERATURE = 0.1;
+const ENHANCE_TIMEOUT_MS = 30000;
 
 function createEnhanceClient(apiKey: string, model?: string): OpenRouterService {
-  return new OpenRouterService(apiKey, model?.trim() || DEFAULT_ENHANCE_MODEL);
+  return new OpenRouterService(apiKey, model?.trim() || DEFAULT_ENHANCE_MODEL, ENHANCE_TIMEOUT_MS);
 }
 
 export type AiEnhanceProgress = {

@@ -233,14 +233,14 @@ export function StepEnhance() {
         >
           Back
         </Button>
-        {phase !== 'done' && !isProcessing && (
+        {error && !isProcessing && phase !== 'done' && (
           <Button
             variant="ghost"
             size="sm"
             className="h-8 text-muted-foreground"
             onClick={() => dispatch({ type: 'SET_STEP', step: 'review' })}
           >
-            Skip &mdash; Go directly to Review
+            Continue without AI
           </Button>
         )}
         {phase === 'done' && (

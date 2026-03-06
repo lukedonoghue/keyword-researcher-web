@@ -22,11 +22,11 @@ export class OpenRouterService {
   private model: string;
   private timeoutMs: number;
 
-  constructor(apiKey: string, model: string = DEFAULT_OPENROUTER_MODEL) {
+  constructor(apiKey: string, model: string = DEFAULT_OPENROUTER_MODEL, timeoutMs: number = 60000) {
     this.apiKey = apiKey;
     this.model = model;
     this.baseUrl = 'https://openrouter.ai/api/v1';
-    this.timeoutMs = 60000;
+    this.timeoutMs = timeoutMs;
   }
 
   isAvailable(): boolean {
@@ -39,6 +39,10 @@ export class OpenRouterService {
 
   setModel(model: string): void {
     this.model = model;
+  }
+
+  setTimeout(timeoutMs: number): void {
+    this.timeoutMs = timeoutMs;
   }
 
   private async sleep(ms: number): Promise<void> {
