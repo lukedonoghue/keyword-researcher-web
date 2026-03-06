@@ -39,6 +39,19 @@ const qualityDotColors: Record<string, string> = {
   'D': 'bg-red-500',
 };
 
+const strongNegativeIntentPatterns = [
+  /\b(competitor|vs|versus|alternative|alternatives)\b/i,
+  /\b(reddit|wikipedia|youtube|forum)\b/i,
+  /\b(job|jobs|career|careers|salary|salaries|internship)\b/i,
+  /\b(login|signin|sign in|account|support|help desk|faq|privacy|policy|terms|contact us)\b/i,
+  /\b(diy|do it yourself|how to|tutorial|guide)\b/i,
+  /\b(used|second hand|secondhand|free)\b/i,
+];
+
+function hasStrongNegativeIntentSignal(text: string): boolean {
+  return strongNegativeIntentPatterns.some((pattern) => pattern.test(text));
+}
+
 type SortKey = 'text' | 'volume' | 'cpc' | 'intent' | 'quality';
 type SortDir = 'asc' | 'desc';
 type IntentFilter = 'all' | 'transactional' | 'commercial' | 'informational' | 'navigational';
@@ -68,15 +81,32 @@ export function StepReview() {
 
   const suppressedKeywords = state.enhancedSuppressed.length > 0 ? state.enhancedSuppressed : state.suppressedKeywords;
 
-  // Combine suppressed keywords + competitor brands as negative candidates
+  // Build conservative negative candidates:
+  // - explicit competitor brand suppressions
+  // - AI/strategy negative suppressions only when keyword text has strong negative-intent signals
+  // - explicit competitor names from research
   const negativeCandidates = useMemo(() => {
     const items: { text: string; reasons: string[] }[] = [];
     for (const kw of suppressedKeywords) {
-      items.push({ text: kw.text, reasons: kw.suppressionReasons });
+      const reasons = kw.suppressionReasons.map((reason) => reason.trim()).filter(Boolean);
+      if (reasons.length === 0) continue;
+      const lowered = reasons.map((reason) => reason.toLowerCase());
+      const hasCompetitorReason = lowered.some((reason) => reason.includes('competitor brand'));
+      const hasNegativeIntentReason = lowered.some(
+        (reason) =>
+          reason.includes('negative intent') ||
+          reason.includes('low-value target') ||
+          reason.includes('ai flagged as negative') ||
+          reason.includes('irrelevant')
+      );
+
+      // Prevent strategy-filtered terms (volume/CPC/informational) from becoming negatives by default.
+      if (hasCompetitorReason || (hasNegativeIntentReason && hasStrongNegativeIntentSignal(kw.text))) {
+        items.push({ text: kw.text, reasons });
+      }
     }
-    // Add competitor names as negative candidates (from Perplexity scrape)
+    // Add competitor names as negative candidates (from competitor research)
     for (const name of state.competitorNames) {
-      // Avoid duplicating if already present as a suppressed keyword
       if (!items.some(item => item.text.toLowerCase() === name.toLowerCase())) {
         items.push({ text: name, reasons: ['Local competitor brand (from competitor research)'] });
       }
@@ -517,6 +547,11 @@ export function StepReview() {
             </button>
             {showSuppressed && (
               <div className="border-t">
+                <div className="px-4 py-2 border-b bg-muted/20">
+                  <p className="text-[11px] text-muted-foreground">
+                    Suggested negatives are limited to strong negative-intent terms and competitor brands.
+                  </p>
+                </div>
                 <ScrollArea className="max-h-[300px]">
                   <Table>
                     <TableHeader>

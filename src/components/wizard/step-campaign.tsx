@@ -278,6 +278,86 @@ export function StepCampaign() {
     URL.revokeObjectURL(url);
   }, [state.campaigns, state.targetUrl]);
 
+  const handleExportDiagnostic = useCallback(async () => {
+    const adGroupCount = state.campaigns.reduce((sum, campaign) => sum + campaign.adGroups.length, 0);
+    const keywordRowCount = state.campaigns.reduce(
+      (sum, campaign) => sum + campaign.adGroups.reduce(
+        (adGroupSum, adGroup) => adGroupSum + adGroup.subThemes.reduce(
+          (subThemeSum, subTheme) => subThemeSum + subTheme.keywords.length, 0
+        ), 0
+      ), 0
+    );
+
+    const settings = {
+      generatedAt: new Date().toISOString(),
+      targetUrl: state.targetUrl,
+      targetDomain: state.targetDomain,
+      businessName: state.businessName,
+      geo: {
+        displayName: state.geoDisplayName,
+        geoTargetId: state.geoTargetId,
+        geoTargets: state.geoTargets.map((target) => ({ id: target.id, name: target.name })),
+        countryCode: state.geoCountryCode,
+        languageId: state.languageId,
+      },
+      services: state.selectedServices,
+      strategy: state.strategy,
+      counts: {
+        seedKeywords: state.seedKeywords.length,
+        selectedKeywords: state.selectedKeywords.length,
+        suppressedKeywords: state.suppressedKeywords.length,
+        enhancedKeywords: state.enhancedKeywords.length,
+        enhancedSuppressed: state.enhancedSuppressed.length,
+        campaigns: state.campaigns.length,
+        adGroups: adGroupCount,
+        keywordRows: keywordRowCount,
+        exportedNegatives: state.negativeKeywords.length,
+      },
+      competitorNames: state.competitorNames,
+      reviewNegativeKeywords: state.reviewNegativeKeywords,
+    };
+
+    const res = await fetch('/api/export-csv', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        campaigns: state.campaigns,
+        defaultUrl: state.targetUrl,
+        format: 'diagnostic',
+        negativeKeywords: state.negativeKeywords,
+        settings,
+      }),
+    });
+    if (!res.ok) return;
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'campaign_diagnostic_snapshot.csv';
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [
+    state.businessName,
+    state.campaigns,
+    state.competitorNames,
+    state.enhancedKeywords.length,
+    state.enhancedSuppressed.length,
+    state.geoCountryCode,
+    state.geoDisplayName,
+    state.geoTargetId,
+    state.geoTargets,
+    state.languageId,
+    state.negativeKeywords,
+    state.reviewNegativeKeywords,
+    state.seedKeywords.length,
+    state.selectedKeywords.length,
+    state.selectedServices,
+    state.strategy,
+    state.suppressedKeywords.length,
+    state.targetDomain,
+    state.targetUrl,
+  ]);
+
   const handleImport = useCallback(async () => {
     setImporting(true);
     setImportResult(null);
@@ -936,13 +1016,20 @@ export function StepCampaign() {
           </div>
 
           {/* Smaller analysis export link */}
-          <div className="text-center">
+          <div className="text-center flex items-center justify-center gap-4 flex-wrap">
             <button
               type="button"
               className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2 transition-colors"
               onClick={handleExportAnalysis}
             >
               Download full analysis CSV
+            </button>
+            <button
+              type="button"
+              className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2 transition-colors"
+              onClick={handleExportDiagnostic}
+            >
+              Download troubleshooting CSV (settings + build)
             </button>
           </div>
         </div>

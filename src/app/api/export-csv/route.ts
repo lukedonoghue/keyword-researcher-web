@@ -10,18 +10,28 @@ export async function POST(request: NextRequest) {
       defaultUrl?: string;
       format?: CsvFormat;
       negativeKeywords?: NegativeKeyword[];
+      settings?: Record<string, unknown>;
     };
     const campaigns = Array.isArray(payload.campaigns) ? payload.campaigns : [];
     const defaultUrl = payload.defaultUrl?.trim() || '';
-    const format = payload.format === 'analysis' ? 'analysis' : 'google-ads-editor';
+    const format = payload.format === 'analysis'
+      ? 'analysis'
+      : payload.format === 'diagnostic'
+        ? 'diagnostic'
+        : 'google-ads-editor';
     const negativeKeywords = Array.isArray(payload.negativeKeywords) ? payload.negativeKeywords : [];
+    const settings = payload.settings && typeof payload.settings === 'object' ? payload.settings : {};
 
     if (!campaigns.length) {
       return NextResponse.json({ error: 'Campaign data is required' }, { status: 400 });
     }
 
-    const csv = generateCampaignCsv(campaigns, defaultUrl, format, negativeKeywords);
-    const filename = format === 'analysis' ? 'campaign_analysis.csv' : 'google_ads_editor_import.csv';
+    const csv = generateCampaignCsv(campaigns, defaultUrl, format, negativeKeywords, settings);
+    const filename = format === 'analysis'
+      ? 'campaign_analysis.csv'
+      : format === 'diagnostic'
+        ? 'campaign_diagnostic_snapshot.csv'
+        : 'google_ads_editor_import.csv';
 
     return new NextResponse(csv, {
       headers: {

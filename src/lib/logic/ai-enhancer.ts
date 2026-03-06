@@ -5,6 +5,11 @@ import { dedupeSeedKeywords } from './keyword-merge';
 
 const BATCH_SIZE = 80;
 const MAX_CONCURRENT_BATCHES = 4;
+const DEFAULT_ENHANCE_MODEL = process.env.OPENROUTER_ENHANCE_MODEL?.trim() || 'google/gemini-2.5-pro';
+
+function createEnhanceClient(apiKey: string): OpenRouterService {
+  return new OpenRouterService(apiKey, DEFAULT_ENHANCE_MODEL);
+}
 
 export type AiEnhanceProgress = {
   phase: 'intent' | 'themes' | 'quality' | 'merging' | 'done';
@@ -85,7 +90,7 @@ export async function runIntentPhase(
   targetDomain: string,
   apiKey: string,
 ): Promise<PhaseResult> {
-  const client = new OpenRouterService(apiKey);
+  const client = createEnhanceClient(apiKey);
   if (!client.isAvailable()) {
     return { keywords, stats: { model: '', intentChanges: 0, themesReassigned: 0, negativesReclassified: 0, qualityAdjustments: 0, totalTokens: 0 } };
   }
@@ -140,7 +145,7 @@ export async function runThemesPhase(
   services: string[],
   apiKey: string,
 ): Promise<PhaseResult> {
-  const client = new OpenRouterService(apiKey);
+  const client = createEnhanceClient(apiKey);
   if (!client.isAvailable()) {
     return { keywords, stats: { model: '', intentChanges: 0, themesReassigned: 0, negativesReclassified: 0, qualityAdjustments: 0, totalTokens: 0 } };
   }
@@ -191,7 +196,7 @@ export async function runQualityPhase(
   strategy: CampaignStrategy | null,
   apiKey: string,
 ): Promise<PhaseResult> {
-  const client = new OpenRouterService(apiKey);
+  const client = createEnhanceClient(apiKey);
   if (!client.isAvailable()) {
     return { keywords, stats: { model: '', intentChanges: 0, themesReassigned: 0, negativesReclassified: 0, qualityAdjustments: 0, totalTokens: 0 } };
   }
