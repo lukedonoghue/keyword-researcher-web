@@ -6,7 +6,7 @@ import { AuthProvider } from "@/providers/auth-provider";
 import { WorkflowProvider } from "@/providers/workflow-provider";
 import { ThemeProvider } from "@/providers/theme-provider";
 
-const commitSha = (process.env.VERCEL_GIT_COMMIT_SHA ?? "local").slice(0, 7);
+const commitSha = (process.env.NEXT_PUBLIC_APP_COMMIT_SHA || "local").slice(0, 7);
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
