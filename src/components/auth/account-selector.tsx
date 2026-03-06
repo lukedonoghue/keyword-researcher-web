@@ -1,8 +1,15 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { useAuth } from '@/providers/auth-provider';
 import type { GoogleAdsAccountNode, GoogleAdsAccountSelection } from '@/lib/types/google-ads';
 import { getErrorMessage } from '@/lib/utils';
@@ -12,6 +19,62 @@ type AccountsResponse = {
   selection?: GoogleAdsAccountSelection;
   error?: string;
 };
+
+type AccountOption = {
+  customerId: string;
+  descriptiveName: string;
+  label: string;
+};
+
+function collectLeafAccounts(node: GoogleAdsAccountNode, path: string[]): AccountOption[] {
+  const nextPath = [...path, node.descriptiveName];
+  if (!node.isManager) {
+    return [{
+      customerId: node.customerId,
+      descriptiveName: node.descriptiveName,
+      label: `${nextPath.join(' / ')} (${node.customerId})`,
+    }];
+  }
+
+  return node.children.flatMap((child) => collectLeafAccounts(child, nextPath));
+}
+
+function findManagerPath(
+  nodes: GoogleAdsAccountNode[],
+  targetManagerId: string | null,
+  targetAccountId: string | null
+): string[] {
+  for (const node of nodes) {
+    if (!node.isManager) continue;
+
+    if (targetManagerId && node.customerId === targetManagerId) {
+      return [node.customerId];
+    }
+
+    const childPath = findManagerPath(node.children, targetManagerId, targetAccountId);
+    if (childPath.length > 0) {
+      return [node.customerId, ...childPath];
+    }
+
+    if (targetAccountId) {
+      const leafIds = collectLeafAccounts(node, []).map((account) => account.customerId);
+      if (leafIds.includes(targetAccountId)) {
+        return [node.customerId];
+      }
+    }
+  }
+
+  return [];
+}
+
+function findNodeById(nodes: GoogleAdsAccountNode[], customerId: string): GoogleAdsAccountNode | null {
+  for (const node of nodes) {
+    if (node.customerId === customerId) return node;
+    const nested = findNodeById(node.children, customerId);
+    if (nested) return nested;
+  }
+  return null;
+}
 
 export function AccountSelector() {
   const {
@@ -29,6 +92,9 @@ export function AccountSelector() {
   const [loading, setLoading] = useState(true);
   const [submittingId, setSubmittingId] = useState('');
   const [error, setError] = useState('');
+  const [selectedManagerPath, setSelectedManagerPath] = useState<string[]>([]);
+  const [selectedAccountId, setSelectedAccountId] = useState('');
+  const [initialized, setInitialized] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -48,6 +114,7 @@ export function AccountSelector() {
           loginCustomerId: null,
           descriptiveName: null,
         });
+        setInitialized(false);
       } catch (err: unknown) {
         if (!active) return;
         setError(getErrorMessage(err, 'Failed to load accounts'));
@@ -66,19 +133,112 @@ export function AccountSelector() {
   const currentLoginCustomerId = loginCustomerId || selection.loginCustomerId;
   const currentAccountName = selectedAccountName || selection.descriptiveName;
 
-  const handleSelect = async (node: GoogleAdsAccountNode, rootManagerId: string | null) => {
+  useEffect(() => {
+    if (initialized || hierarchy.length === 0) return;
+
+    const initialManagerPath = findManagerPath(hierarchy, currentLoginCustomerId, currentCustomerId);
+    setSelectedManagerPath(initialManagerPath);
+
+    const contextNode = initialManagerPath.length > 0
+      ? findNodeById(hierarchy, initialManagerPath[initialManagerPath.length - 1])
+      : null;
+
+    if (currentCustomerId) {
+      if (contextNode) {
+        const descendantAccounts = collectLeafAccounts(contextNode, []);
+        if (descendantAccounts.some((account) => account.customerId === currentCustomerId)) {
+          setSelectedAccountId(currentCustomerId);
+        }
+      } else {
+        const rootLeafAccounts = hierarchy
+          .filter((node) => !node.isManager)
+          .map((node) => ({
+            customerId: node.customerId,
+            descriptiveName: node.descriptiveName,
+          }));
+        if (rootLeafAccounts.some((account) => account.customerId === currentCustomerId)) {
+          setSelectedAccountId(currentCustomerId);
+        }
+      }
+    }
+
+    setInitialized(true);
+  }, [currentCustomerId, currentLoginCustomerId, hierarchy, initialized]);
+
+  const managerLevels = useMemo(() => {
+    const levels: Array<{
+      level: number;
+      options: GoogleAdsAccountNode[];
+    }> = [];
+
+    let currentNodes = hierarchy;
+    let level = 0;
+
+    while (true) {
+      const managers = currentNodes.filter((node) => node.isManager);
+      if (managers.length === 0) break;
+
+      levels.push({ level, options: managers });
+
+      const selectedManagerId = selectedManagerPath[level];
+      const selectedNode = managers.find((node) => node.customerId === selectedManagerId);
+      if (!selectedNode) break;
+
+      currentNodes = selectedNode.children;
+      level += 1;
+    }
+
+    return levels;
+  }, [hierarchy, selectedManagerPath]);
+
+  const activeManager = useMemo(() => {
+    if (selectedManagerPath.length === 0) return null;
+    return findNodeById(hierarchy, selectedManagerPath[selectedManagerPath.length - 1]);
+  }, [hierarchy, selectedManagerPath]);
+
+  const accountOptions = useMemo(() => {
+    if (activeManager) {
+      return collectLeafAccounts(activeManager, []);
+    }
+
+    const rootLeafAccounts = hierarchy.filter((node) => !node.isManager);
+    return rootLeafAccounts.map((node) => ({
+      customerId: node.customerId,
+      descriptiveName: node.descriptiveName,
+      label: `${node.descriptiveName} (${node.customerId})`,
+    }));
+  }, [activeManager, hierarchy]);
+
+  const managerBreadcrumb = useMemo(() => {
+    return selectedManagerPath
+      .map((managerId) => findNodeById(hierarchy, managerId)?.descriptiveName)
+      .filter((label): label is string => Boolean(label))
+      .join(' / ');
+  }, [hierarchy, selectedManagerPath]);
+
+  const handleManagerChange = (level: number, managerId: string) => {
+    setSelectedManagerPath((prev) => [...prev.slice(0, level), managerId]);
+    setSelectedAccountId('');
+  };
+
+  const handleApplySelection = async () => {
+    const selectedAccount = accountOptions.find((account) => account.customerId === selectedAccountId);
+    if (!selectedAccount) return;
+
     try {
-      setSubmittingId(node.customerId);
+      setSubmittingId(selectedAccount.customerId);
       setError('');
+
       await selectAccount({
-        customerId: node.customerId,
-        loginCustomerId: rootManagerId,
-        descriptiveName: node.descriptiveName,
+        customerId: selectedAccount.customerId,
+        loginCustomerId: activeManager?.customerId ?? null,
+        descriptiveName: selectedAccount.descriptiveName,
       });
+
       setSelection({
-        customerId: node.customerId,
-        loginCustomerId: rootManagerId,
-        descriptiveName: node.descriptiveName,
+        customerId: selectedAccount.customerId,
+        loginCustomerId: activeManager?.customerId ?? null,
+        descriptiveName: selectedAccount.descriptiveName,
       });
     } catch (err: unknown) {
       setError(getErrorMessage(err, 'Failed to select account'));
@@ -87,12 +247,17 @@ export function AccountSelector() {
     }
   };
 
+  const selectionIsCurrent =
+    selectedAccountId.length > 0 &&
+    selectedAccountId === currentCustomerId &&
+    (activeManager?.customerId ?? null) === currentLoginCustomerId;
+
   if (loading) return <p className="text-xs text-muted-foreground">Loading Google Ads account hierarchy...</p>;
   if (error) return <p className="text-xs text-destructive">{error}</p>;
   if (hierarchy.length === 0) return <p className="text-xs text-muted-foreground">No Google Ads accounts found.</p>;
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-4">
       <div className="rounded-lg border border-border/70 bg-muted/10 p-3">
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant="outline">Publish Target</Badge>
@@ -105,123 +270,85 @@ export function AccountSelector() {
               )}
             </>
           ) : (
-            <span className="text-xs text-muted-foreground">Choose the exact ad account inside your MCC tree.</span>
+            <span className="text-xs text-muted-foreground">Choose the manager context, then the exact ad account to publish into.</span>
           )}
         </div>
         <p className="mt-2 text-xs text-muted-foreground">
-          Manager accounts are for navigation only. Select a leaf ad account to use for direct Google Ads import.
+          Additional MCC dropdowns appear automatically when the selected manager contains another MCC layer.
         </p>
       </div>
 
-      <div className="space-y-2">
-        {hierarchy.map((node) => (
-          <AccountTreeNode
-            key={node.customerId}
-            node={node}
-            depth={0}
-            rootManagerId={node.isManager ? node.customerId : null}
-            selectedCustomerId={currentCustomerId}
-            selectedLoginCustomerId={currentLoginCustomerId}
-            submittingId={submittingId}
-            onSelect={handleSelect}
-          />
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function AccountTreeNode({
-  node,
-  depth,
-  rootManagerId,
-  selectedCustomerId,
-  selectedLoginCustomerId,
-  submittingId,
-  onSelect,
-}: {
-  node: GoogleAdsAccountNode;
-  depth: number;
-  rootManagerId: string | null;
-  selectedCustomerId: string | null;
-  selectedLoginCustomerId: string | null;
-  submittingId: string;
-  onSelect: (node: GoogleAdsAccountNode, rootManagerId: string | null) => Promise<void>;
-}) {
-  const effectiveRootManagerId = rootManagerId || (node.isManager ? node.customerId : null);
-  const isSelected = node.customerId === selectedCustomerId;
-
-  if (node.isManager) {
-    return (
-      <details open={depth === 0} className="rounded-lg border border-border/70 bg-card/50">
-        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <Badge variant="outline">MCC</Badge>
-              <span className="text-sm font-medium">{node.descriptiveName}</span>
-              <span className="font-mono text-[11px] text-muted-foreground">{node.customerId}</span>
-              {node.children.length > 0 && (
-                <Badge variant="secondary">{node.children.length} child accounts</Badge>
-              )}
-            </div>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {selectedLoginCustomerId === node.customerId
-                ? 'Current manager context'
-                : 'Expand to choose a child account'}
+      <div className="grid gap-3 md:grid-cols-2">
+        {managerLevels.map(({ level, options }) => (
+          <div key={`manager-level-${level}`} className="space-y-1.5">
+            <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">
+              MCC Level {level + 1}
             </p>
+            <Select
+              value={selectedManagerPath[level] || undefined}
+              onValueChange={(value) => handleManagerChange(level, value)}
+            >
+              <SelectTrigger size="sm" className="h-9 text-xs">
+                <SelectValue placeholder={`Select MCC level ${level + 1}`} />
+              </SelectTrigger>
+              <SelectContent>
+                {options.map((node) => {
+                  const descendantCount = collectLeafAccounts(node, []).length;
+                  return (
+                    <SelectItem key={node.customerId} value={node.customerId}>
+                      {node.descriptiveName} ({descendantCount} accounts)
+                    </SelectItem>
+                  );
+                })}
+              </SelectContent>
+            </Select>
           </div>
-          <span className="text-[11px] text-muted-foreground">Browse</span>
-        </summary>
-        <div className="border-t border-border/60 px-3 py-3">
-          {node.children.length > 0 ? (
-            <div className="space-y-2 border-l border-border/60 pl-3">
-              {node.children.map((child) => (
-                <AccountTreeNode
-                  key={child.customerId}
-                  node={child}
-                  depth={depth + 1}
-                  rootManagerId={effectiveRootManagerId}
-                  selectedCustomerId={selectedCustomerId}
-                  selectedLoginCustomerId={selectedLoginCustomerId}
-                  submittingId={submittingId}
-                  onSelect={onSelect}
-                />
-              ))}
-            </div>
-          ) : (
-            <p className="text-xs text-muted-foreground">No visible child accounts under this MCC.</p>
-          )}
-        </div>
-      </details>
-    );
-  }
+        ))}
 
-  return (
-    <div className="flex flex-col gap-2 rounded-lg border border-border/60 bg-card/40 px-3 py-3 sm:flex-row sm:items-center sm:justify-between">
-      <div className="min-w-0">
+        <div className="space-y-1.5">
+          <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">
+            Ad Account
+          </p>
+          <Select value={selectedAccountId || undefined} onValueChange={setSelectedAccountId}>
+            <SelectTrigger size="sm" className="h-9 text-xs">
+              <SelectValue placeholder={managerLevels.length > 0 && !activeManager ? 'Select an MCC first' : 'Select ad account'} />
+            </SelectTrigger>
+            <SelectContent>
+              {accountOptions.map((account) => (
+                <SelectItem key={account.customerId} value={account.customerId}>
+                  {account.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+
+      <div className="rounded-lg border border-border/70 bg-card/40 px-3 py-3">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="text-sm font-medium">{node.descriptiveName}</span>
-          <span className="font-mono text-[11px] text-muted-foreground">{node.customerId}</span>
-          <Badge variant="secondary">Ad account</Badge>
-          {isSelected && (
-            <Badge className="bg-green-600 text-white hover:bg-green-600">Selected</Badge>
+          <Badge variant="secondary">{accountOptions.length} accounts in scope</Badge>
+          {managerBreadcrumb && (
+            <span className="text-xs text-muted-foreground">
+              Current MCC path: {managerBreadcrumb}
+            </span>
+          )}
+          {!managerBreadcrumb && managerLevels.length === 0 && (
+            <span className="text-xs text-muted-foreground">Direct account access only</span>
           )}
         </div>
-        <p className="mt-1 text-xs text-muted-foreground">
-          {effectiveRootManagerId
-            ? `Publishes via MCC ${effectiveRootManagerId}`
-            : 'Direct account access'}
-        </p>
       </div>
-      <Button
-        size="sm"
-        variant={isSelected ? 'outline' : 'brand'}
-        className="h-8 shrink-0"
-        disabled={Boolean(submittingId) || isSelected}
-        onClick={() => void onSelect(node, effectiveRootManagerId)}
-      >
-        {isSelected ? 'Selected' : submittingId === node.customerId ? 'Selecting...' : 'Select Account'}
-      </Button>
+
+      <div className="flex items-center justify-end">
+        <Button
+          size="sm"
+          variant={selectionIsCurrent ? 'outline' : 'brand'}
+          className="h-8"
+          disabled={!selectedAccountId || Boolean(submittingId) || selectionIsCurrent}
+          onClick={() => void handleApplySelection()}
+        >
+          {selectionIsCurrent ? 'Selected' : submittingId ? 'Selecting...' : 'Use This Account'}
+        </Button>
+      </div>
     </div>
   );
 }

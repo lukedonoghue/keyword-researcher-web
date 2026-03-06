@@ -6,11 +6,18 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Slider } from '@/components/ui/slider';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Shield, Target, Zap } from 'lucide-react';
 import type { CampaignMatchTypeStrategy, CampaignStrategy } from '@/lib/types/index';
+
+const DAYS_PER_MONTH = 30.4;
+const DAILY_BUDGET_MIN = 10;
+const DAILY_BUDGET_MAX = 1000;
+const DAILY_BUDGET_STEP = 5;
+const DAILY_BUDGET_PRESETS = [50, 100, 300, 500];
 
 const presets: {
   label: string;
@@ -78,10 +85,20 @@ function getMatchTypeSummary(strategy: CampaignMatchTypeStrategy): string {
   return 'Each keyword will be built in both Exact and Phrase match by default.';
 }
 
+function monthlyToDailyBudget(monthlyBudget: number) {
+  const safeDaily = Math.round(monthlyBudget / DAYS_PER_MONTH / DAILY_BUDGET_STEP) * DAILY_BUDGET_STEP;
+  return Math.min(DAILY_BUDGET_MAX, Math.max(DAILY_BUDGET_MIN, safeDaily || DAILY_BUDGET_MIN));
+}
+
+function dailyToMonthlyBudget(dailyBudget: number) {
+  return Math.round(dailyBudget * DAYS_PER_MONTH);
+}
+
 export function StepStrategy() {
   const { state, dispatch } = useWorkflow();
   const [strategy, setStrategy] = useState<CampaignStrategy>(state.strategy);
   const [manualSeeds, setManualSeeds] = useState(state.manualSeedKeywords.join('\n'));
+  const dailyBudget = monthlyToDailyBudget(strategy.monthlyBudget);
 
   const update = (partial: Partial<CampaignStrategy>) => {
     setStrategy((prev) => ({ ...prev, ...partial }));
@@ -138,7 +155,7 @@ export function StepStrategy() {
           <CardTitle className="text-sm">Goals & Budget</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-[220px_1fr]">
             <div className="space-y-1">
               <Label className="text-xs">Campaign Goal</Label>
               <Select value={strategy.goal} onValueChange={(v) => update({ goal: v as CampaignStrategy['goal'] })}>
@@ -152,15 +169,50 @@ export function StepStrategy() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-1">
-              <Label className="text-xs">Monthly Budget ($)</Label>
-              <Input
-                type="number"
-                value={strategy.monthlyBudget}
-                onChange={(e) => update({ monthlyBudget: Number(e.target.value) })}
-                className="h-8 text-xs"
+
+            <div className="space-y-3 rounded-lg border border-border/70 bg-muted/10 px-4 py-3">
+              <div className="flex flex-wrap items-end justify-between gap-3">
+                <div>
+                  <Label className="text-xs">Daily Budget</Label>
+                  <p className="mt-1 text-2xl font-semibold tabular-nums">${dailyBudget.toLocaleString()}/day</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-[11px] uppercase tracking-wider text-muted-foreground">Estimated Monthly Spend</p>
+                  <p className="text-sm font-medium tabular-nums text-muted-foreground">
+                    ~${strategy.monthlyBudget.toLocaleString()}/mo
+                  </p>
+                </div>
+              </div>
+
+              <Slider
+                min={DAILY_BUDGET_MIN}
+                max={DAILY_BUDGET_MAX}
+                step={DAILY_BUDGET_STEP}
+                value={[dailyBudget]}
+                onValueChange={([nextDailyBudget]) => {
+                  update({ monthlyBudget: dailyToMonthlyBudget(nextDailyBudget) });
+                }}
+                className="[&_[data-slot=slider-range]]:bg-brand-accent [&_[data-slot=slider-thumb]]:border-brand-accent"
               />
-              <p className="text-[11px] text-muted-foreground">Total monthly Google Ads spend</p>
+
+              <div className="flex flex-wrap gap-2">
+                {DAILY_BUDGET_PRESETS.map((presetDailyBudget) => (
+                  <Button
+                    key={presetDailyBudget}
+                    type="button"
+                    variant={dailyBudget === presetDailyBudget ? 'brand' : 'outline'}
+                    size="sm"
+                    className="h-7 text-[11px]"
+                    onClick={() => update({ monthlyBudget: dailyToMonthlyBudget(presetDailyBudget) })}
+                  >
+                    ${presetDailyBudget}/day
+                  </Button>
+                ))}
+              </div>
+
+              <p className="text-[11px] text-muted-foreground">
+                Set pacing in daily spend. The workflow stores this as monthly budget underneath for filtering and campaign recommendations.
+              </p>
             </div>
           </div>
 
