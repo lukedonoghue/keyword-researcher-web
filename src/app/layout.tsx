@@ -6,6 +6,8 @@ import { AuthProvider } from "@/providers/auth-provider";
 import { WorkflowProvider } from "@/providers/workflow-provider";
 import { ThemeProvider } from "@/providers/theme-provider";
 
+const commitSha = (process.env.VERCEL_GIT_COMMIT_SHA ?? "local").slice(0, 7);
+
 const geistSans = Geist({
   variable: "--font-geist-sans",
   subsets: ["latin"],
@@ -40,6 +42,9 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
+        <div className="pointer-events-none fixed bottom-2 right-2 z-[9999] rounded bg-yellow-400 px-2 py-0.5 text-[10px] font-bold text-black shadow-lg">
+          {commitSha}
+        </div>
         <ThemeProvider>
           <TooltipProvider>
             <AuthProvider>
