@@ -23,6 +23,8 @@ const LOCATION_TYPE_PRIORITY = [
   'Postal Code',
 ] as const;
 
+type PreferredTargetKind = 'state' | 'city';
+
 const STATE_ABBREVIATION_ALIASES: Record<string, Record<string, string>> = {
   AU: {
     ACT: 'Australian Capital Territory',
@@ -92,18 +94,60 @@ function normalizeLocationValue(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ');
 }
 
-function buildLocationQueries(name: string, countryCode: string): string[] {
+function normalizeTargetType(type: string): string {
+  return type.toLowerCase().replace(/[^a-z]+/g, ' ').trim();
+}
+
+function isStateLikeTargetType(type: string): boolean {
+  const normalized = normalizeTargetType(type);
+  return (
+    normalized.includes('state') ||
+    normalized.includes('province') ||
+    normalized.includes('region') ||
+    normalized.includes('territory') ||
+    normalized.includes('county')
+  );
+}
+
+function isCityLikeTargetType(type: string): boolean {
+  const normalized = normalizeTargetType(type);
+  return (
+    normalized.includes('city') ||
+    normalized.includes('municipality') ||
+    normalized.includes('borough') ||
+    normalized.includes('district') ||
+    normalized.includes('neighborhood') ||
+    normalized.includes('suburb') ||
+    normalized.includes('metro') ||
+    normalized.includes('town')
+  );
+}
+
+function matchesPreferredTargetKind(type: string, preferredKind?: PreferredTargetKind): boolean {
+  if (!preferredKind) return true;
+  return preferredKind === 'state' ? isStateLikeTargetType(type) : isCityLikeTargetType(type);
+}
+
+function buildLocationQueries(name: string, countryCode: string, preferredKind?: PreferredTargetKind): string[] {
   const trimmed = name.trim();
   if (!trimmed) return [];
   const aliases = STATE_ABBREVIATION_ALIASES[countryCode.toUpperCase()] ?? {};
   const expanded = aliases[trimmed.toUpperCase()];
-  return expanded && expanded !== trimmed ? [trimmed, expanded] : [trimmed];
+  const countryName = GEO_CONSTANTS.find((geo) => geo.countryCode.toUpperCase() === countryCode.toUpperCase())?.displayName;
+  const queries = expanded && expanded !== trimmed ? [expanded, trimmed] : [trimmed];
+
+  if (preferredKind === 'state' && countryName) {
+    return Array.from(new Set(queries.flatMap((query) => [`${query} ${countryName}`, query])));
+  }
+
+  return queries;
 }
 
 function scoreLocationSuggestion(
   suggestion: GeoLocationSuggestion,
   query: string,
   countryCode?: string,
+  preferredKind?: PreferredTargetKind,
 ): number {
   const normalizedQuery = normalizeLocationValue(query);
   const normalizedName = normalizeLocationValue(suggestion.name);
@@ -131,6 +175,10 @@ function scoreLocationSuggestion(
 
   const typeIndex = LOCATION_TYPE_PRIORITY.indexOf(suggestion.targetType as (typeof LOCATION_TYPE_PRIORITY)[number]);
   score += typeIndex === -1 ? 0 : LOCATION_TYPE_PRIORITY.length - typeIndex;
+
+  if (matchesPreferredTargetKind(suggestion.targetType, preferredKind)) {
+    score += 35;
+  }
 
   return score;
 }
@@ -213,8 +261,12 @@ export function GeoLocationPicker({
   }, []);
 
   // Reusable helper: search GKP for a location name and return the best match
-  const searchAndMatch = useCallback(async (name: string, countryCode: string): Promise<GeoLocationSuggestion | null> => {
-    const queries = buildLocationQueries(name, countryCode);
+  const searchAndMatch = useCallback(async (
+    name: string,
+    countryCode: string,
+    preferredKind?: PreferredTargetKind,
+  ): Promise<GeoLocationSuggestion | null> => {
+    const queries = buildLocationQueries(name, countryCode, preferredKind);
 
     for (const query of queries) {
       const attempts: Array<{ query: string; countryCode?: string }> = [
@@ -234,8 +286,22 @@ export function GeoLocationPicker({
           const locations = Array.isArray(data.locations) ? data.locations : [];
           if (locations.length === 0) continue;
 
-          const [bestMatch] = [...locations].sort(
-            (left, right) => scoreLocationSuggestion(right, query, countryCode) - scoreLocationSuggestion(left, query, countryCode),
+          const preferredLocations =
+            preferredKind
+              ? locations.filter((location) => matchesPreferredTargetKind(location.targetType, preferredKind))
+              : locations;
+
+          const candidatePool =
+            preferredLocations.length > 0
+              ? preferredLocations
+              : preferredKind === 'state'
+                ? []
+                : locations;
+
+          const [bestMatch] = [...candidatePool].sort(
+            (left, right) =>
+              scoreLocationSuggestion(right, query, countryCode, preferredKind) -
+              scoreLocationSuggestion(left, query, countryCode, preferredKind),
           );
 
           if (bestMatch) {
@@ -279,7 +345,10 @@ export function GeoLocationPicker({
 
     // If idle or no-match, try searching
     setMatchStatuses((prev) => ({ ...prev, [name]: 'loading' }));
-    const result = await searchAndMatch(name, selectedCountry);
+    const preferredKind: PreferredTargetKind = detectedServiceArea?.states.includes(name)
+      ? 'state'
+      : 'city';
+    const result = await searchAndMatch(name, selectedCountry, preferredKind);
     if (result) {
       setMatchStatuses((prev) => ({ ...prev, [name]: 'matched' }));
       setMatchResults((prev) => ({ ...prev, [name]: result }));
@@ -292,7 +361,7 @@ export function GeoLocationPicker({
       setMatchStatuses((prev) => ({ ...prev, [name]: 'no-match' }));
       showInlineMessage(`"${name}" not found in Google Keyword Planner. Try searching for a broader area.`);
     }
-  }, [matchStatuses, matchResults, selectedLocations, selectedCountry, searchAndMatch, showInlineMessage]);
+  }, [detectedServiceArea?.states, matchStatuses, matchResults, selectedLocations, selectedCountry, searchAndMatch, showInlineMessage]);
 
   // Debounced search
   useEffect(() => {
@@ -342,13 +411,18 @@ export function GeoLocationPicker({
       let matchedCount = 0;
       let doneCount = 0;
 
+      const locationQueue = [
+        ...cities.map((name) => ({ name, preferredKind: 'city' as const })),
+        ...states.map((name) => ({ name, preferredKind: 'state' as const })),
+      ];
+
       // Process sequentially to show progress and avoid overwhelming the API
-      for (const name of allNames) {
+      for (const { name, preferredKind } of locationQueue) {
         if (cancelled) return;
 
         setMatchStatuses((prev) => ({ ...prev, [name]: 'loading' }));
 
-        const result = await searchAndMatch(name, selectedCountry);
+        const result = await searchAndMatch(name, selectedCountry, preferredKind);
         doneCount++;
 
         if (cancelled) return;
@@ -429,13 +503,9 @@ export function GeoLocationPicker({
   };
 
   const targetTypeBadgeVariant = (type: string): 'default' | 'secondary' | 'outline' => {
-    switch (type) {
-      case 'City': return 'default';
-      case 'State':
-      case 'Province':
-      case 'Region': return 'secondary';
-      default: return 'outline';
-    }
+    if (isCityLikeTargetType(type)) return 'default';
+    if (isStateLikeTargetType(type)) return 'secondary';
+    return 'outline';
   };
 
   const formatReach = (reach: number): string => {

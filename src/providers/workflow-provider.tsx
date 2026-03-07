@@ -12,6 +12,7 @@ import type {
   WebsiteMessagingProfile,
 } from '@/lib/types/index';
 import type { ServiceArea, GeoLocationSuggestion } from '@/lib/types/geo';
+import { normalizeCompetitorNames } from '@/lib/logic/competitor-names';
 
 export type WizardStep =
   | 'setup'
@@ -171,7 +172,7 @@ function sanitizeWorkflowState(candidate: unknown): WorkflowState {
       }
     : initialState.messagingProfile;
 
-  return {
+  const sanitized: WorkflowState = {
     ...initialState,
     ...candidate,
     currentStep,
@@ -200,7 +201,7 @@ function sanitizeWorkflowState(candidate: unknown): WorkflowState {
     enhancedSuppressed: asArray<SuppressedKeyword>(candidate.enhancedSuppressed),
     campaigns: asArray<CampaignStructureV2>(candidate.campaigns),
     manualSeedKeywords: asArray<string>(candidate.manualSeedKeywords),
-    competitorNames: asArray<string>(candidate.competitorNames),
+    competitorNames: normalizeCompetitorNames(asArray<string>(candidate.competitorNames)),
     reviewNegativeKeywords: asArray<string>(candidate.reviewNegativeKeywords),
     reviewNegativeKeywordLists: asArray<NegativeKeywordList>(candidate.reviewNegativeKeywordLists),
     negativeKeywords: asArray<NegativeKeyword>(candidate.negativeKeywords),
@@ -208,6 +209,19 @@ function sanitizeWorkflowState(candidate: unknown): WorkflowState {
     isProcessing: false,
     error: null,
   };
+
+  const hasResearchedKeywords =
+    sanitized.seedKeywords.length > 0 ||
+    sanitized.selectedKeywords.length > 0 ||
+    sanitized.suppressedKeywords.length > 0 ||
+    sanitized.enhancedKeywords.length > 0 ||
+    sanitized.enhancedSuppressed.length > 0;
+
+  if (!hasResearchedKeywords && ['competitors', 'enhance', 'review', 'campaign'].includes(sanitized.currentStep)) {
+    sanitized.currentStep = 'research';
+  }
+
+  return sanitized;
 }
 
 function loadPersistedWorkflowState(): WorkflowState {
@@ -286,6 +300,7 @@ export type WorkflowAction =
   | { type: 'SET_CAMPAIGNS'; campaigns: CampaignStructureV2[] }
   | { type: 'SET_MANUAL_SEEDS'; keywords: string[] }
   | { type: 'SET_COMPETITOR_NAMES'; names: string[] }
+  | { type: 'SET_COMPETITOR_CAMPAIGN_MODE'; mode: CampaignStrategy['competitorCampaignMode'] }
   | { type: 'SET_REVIEW_NEGATIVE_KEYWORDS'; keywords: string[] }
   | { type: 'SET_REVIEW_NEGATIVE_KEYWORD_LISTS'; lists: NegativeKeywordList[] }
   | { type: 'SET_NEGATIVE_KEYWORDS'; negativeKeywords: NegativeKeyword[] }
@@ -401,7 +416,15 @@ function workflowReducer(state: WorkflowState, action: WorkflowAction): Workflow
     case 'SET_MANUAL_SEEDS':
       return { ...state, manualSeedKeywords: action.keywords, ...createDownstreamResearchReset() };
     case 'SET_COMPETITOR_NAMES':
-      return { ...state, competitorNames: action.names };
+      return { ...state, competitorNames: normalizeCompetitorNames(action.names) };
+    case 'SET_COMPETITOR_CAMPAIGN_MODE':
+      return {
+        ...state,
+        strategy: {
+          ...state.strategy,
+          competitorCampaignMode: action.mode,
+        },
+      };
     case 'SET_REVIEW_NEGATIVE_KEYWORDS':
       return {
         ...state,

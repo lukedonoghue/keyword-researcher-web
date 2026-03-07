@@ -3,6 +3,30 @@ import { runIntentPhase, runThemesPhase, runQualityPhase, runNegativeKeywordPhas
 import type { CampaignStrategy, SeedKeyword, SuppressedKeyword } from '@/lib/types/index';
 import { getErrorMessage } from '@/lib/utils';
 
+const PHASE_TIMEOUT_MS = {
+  intent: 18000,
+  themes: 18000,
+  quality: 18000,
+  merge: 12000,
+  negatives: 18000,
+} as const;
+
+async function withPhaseTimeout<T>(phase: keyof typeof PHASE_TIMEOUT_MS, run: () => Promise<T>): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race([
+      run(),
+      new Promise<T>((_, reject) => {
+        timeoutId = setTimeout(() => {
+          reject(new Error(`${phase} phase exceeded ${PHASE_TIMEOUT_MS[phase] / 1000}s`));
+        }, PHASE_TIMEOUT_MS[phase]);
+      }),
+    ]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
+
 export async function POST(request: NextRequest) {
   try {
     const payload = await request.json() as {
@@ -33,31 +57,41 @@ export async function POST(request: NextRequest) {
 
     switch (phase) {
       case 'intent': {
-        const result = await runIntentPhase(keywords, services, targetDomain, openrouterApiKey, openrouterModel);
+        const result = await withPhaseTimeout('intent', () => (
+          runIntentPhase(keywords, services, targetDomain, openrouterApiKey, openrouterModel)
+        ));
         return NextResponse.json(result);
       }
       case 'themes': {
-        const result = await runThemesPhase(keywords, services, openrouterApiKey, openrouterModel);
+        const result = await withPhaseTimeout('themes', () => (
+          runThemesPhase(keywords, services, openrouterApiKey, openrouterModel)
+        ));
         return NextResponse.json(result);
       }
       case 'quality': {
-        const result = await runQualityPhase(keywords, services, targetDomain, strategy, openrouterApiKey, openrouterModel);
+        const result = await withPhaseTimeout('quality', () => (
+          runQualityPhase(keywords, services, targetDomain, strategy, openrouterApiKey, openrouterModel)
+        ));
         return NextResponse.json(result);
       }
       case 'merge': {
-        const { selected, suppressed } = mergeAndFilter(keywords, strategy);
+        const { selected, suppressed } = await withPhaseTimeout('merge', async () => (
+          mergeAndFilter(keywords, strategy)
+        ));
         return NextResponse.json({ keywords: selected, suppressed });
       }
       case 'negatives': {
-        const result = await runNegativeKeywordPhase(
-          keywords as SuppressedKeyword[],
-          services,
-          targetDomain,
-          businessName,
-          businessDescription,
-          openrouterApiKey,
-          openrouterModel,
-        );
+        const result = await withPhaseTimeout('negatives', () => (
+          runNegativeKeywordPhase(
+            keywords as SuppressedKeyword[],
+            services,
+            targetDomain,
+            businessName,
+            businessDescription,
+            openrouterApiKey,
+            openrouterModel,
+          )
+        ));
         return NextResponse.json(result);
       }
       default:

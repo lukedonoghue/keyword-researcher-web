@@ -35,14 +35,22 @@ export function StepResearch() {
   const { researchKeywords, isProcessing, error } = useWorkflowData();
   const [phase, setPhase] = useState<'competitors' | 'google' | 'merging' | 'filtering' | 'done'>('competitors');
   const [pipelineStats, setPipelineStats] = useState<PipelineStats | null>(null);
+  const [phaseStartedAt, setPhaseStartedAt] = useState<number | null>(null);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const startedRef = useRef(false);
+
+  const setPipelinePhase = useCallback((nextPhase: 'competitors' | 'google' | 'merging' | 'filtering' | 'done') => {
+    setPhase(nextPhase);
+    setPhaseStartedAt(Date.now());
+    setElapsedSeconds(0);
+  }, []);
 
   const runResearch = useCallback(async (force: boolean = false) => {
     if (!force && startedRef.current) return;
     startedRef.current = true;
     try {
-      setPhase('competitors');
-      const { keywords: allKeywords, competitorNames, cpcDebug } = await researchKeywords((nextPhase) => setPhase(nextPhase));
+      setPipelinePhase('competitors');
+      const { keywords: allKeywords, competitorNames, cpcDebug } = await researchKeywords((nextPhase) => setPipelinePhase(nextPhase));
 
       // Build per-service stats from API debug responses
       const apiPerService = cpcDebug.map(entry => ({
@@ -53,12 +61,12 @@ export function StepResearch() {
         samples: entry.debug.samples.map(s => ({ text: s.text, cpc: s.cpc, vol: s.vol })),
       }));
 
-      setPhase('merging');
+      setPipelinePhase('merging');
       const preMerge = cpcStats(allKeywords);
       const merged = mergeKeywordsWithGoogleAdsAuthority([allKeywords]);
       const postMerge = cpcStats(merged);
 
-      setPhase('filtering');
+      setPipelinePhase('filtering');
       const enriched = enrichSeedKeywordsWithSignals(merged);
       const { selected, suppressed } = applyStrategyFilter(enriched, state.strategy, competitorNames);
       const postFilter = cpcStats(selected);
@@ -67,11 +75,23 @@ export function StepResearch() {
 
       dispatch({ type: 'SET_SEED_KEYWORDS', keywords: merged });
       dispatch({ type: 'SET_FILTERED_KEYWORDS', selected, suppressed });
-      setPhase('done');
+      setPipelinePhase('done');
     } catch {
       // Error handled by useWorkflowData
     }
-  }, [dispatch, researchKeywords, state.strategy]);
+  }, [dispatch, researchKeywords, setPipelinePhase, state.strategy]);
+
+  useEffect(() => {
+    if (!isProcessing || !phaseStartedAt) return;
+
+    const tick = () => {
+      setElapsedSeconds(Math.max(0, Math.floor((Date.now() - phaseStartedAt) / 1000)));
+    };
+
+    tick();
+    const interval = setInterval(tick, 1000);
+    return () => clearInterval(interval);
+  }, [isProcessing, phaseStartedAt]);
 
   useEffect(() => {
     if (startedRef.current || state.seedKeywords.length > 0) {
@@ -84,6 +104,24 @@ export function StepResearch() {
   }, [runResearch, state.seedKeywords.length]);
 
   const progressPercent = { competitors: 25, google: 50, merging: 75, filtering: 90, done: 100 }[phase];
+  const processingMessage = useMemo(() => {
+    if (!isProcessing) return null;
+
+    switch (phase) {
+      case 'competitors':
+        return elapsedSeconds >= 20
+          ? `Perplexity competitor research is still running (${elapsedSeconds}s). The request times out after 45s.`
+          : `Calling Perplexity competitor research (${elapsedSeconds}s).`;
+      case 'google':
+        return `Fetching Google Ads keyword ideas (${elapsedSeconds}s).`;
+      case 'merging':
+        return `Merging and deduplicating keyword sets (${elapsedSeconds}s).`;
+      case 'filtering':
+        return `Applying strategy filters to the keyword pool (${elapsedSeconds}s).`;
+      default:
+        return `Running keyword pipeline (${elapsedSeconds}s).`;
+    }
+  }, [elapsedSeconds, isProcessing, phase]);
 
   const topKeywords = useMemo(() => {
     return state.selectedKeywords
@@ -117,9 +155,9 @@ export function StepResearch() {
             <PhaseRow label="Strategy filtering" active={phase === 'filtering'} done={phase === 'done'} />
           </div>
 
-          {isProcessing && (
+          {processingMessage && (
             <p className="text-[11px] text-muted-foreground">
-              Running keyword pipeline...
+              {processingMessage}
             </p>
           )}
 

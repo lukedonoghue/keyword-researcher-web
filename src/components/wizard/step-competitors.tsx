@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useWorkflow } from '@/providers/workflow-provider';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -8,25 +8,10 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { applyStrategyFilter, enrichSeedKeywordsWithSignals } from '@/lib/logic/strategy-filter';
-import { isCompetitorBrand, normalizeKeywordText } from '@/lib/logic/keyword-signals';
+import { isCompetitorBrand } from '@/lib/logic/keyword-signals';
 import { filterOutSelfCompetitorNames, isSelfBrandName } from '@/lib/logic/brand-identity';
+import { normalizeCompetitorNames } from '@/lib/logic/competitor-names';
 import { X } from 'lucide-react';
-
-function dedupeNames(names: string[]): string[] {
-  const seen = new Set<string>();
-  const ordered: string[] = [];
-
-  for (const name of names) {
-    const trimmed = name.trim().replace(/\s+/g, ' ');
-    if (!trimmed) continue;
-    const normalized = normalizeKeywordText(trimmed);
-    if (!normalized || seen.has(normalized)) continue;
-    seen.add(normalized);
-    ordered.push(trimmed);
-  }
-
-  return ordered.sort((left, right) => left.localeCompare(right));
-}
 
 export function StepCompetitors() {
   const { state, dispatch } = useWorkflow();
@@ -35,14 +20,22 @@ export function StepCompetitors() {
     targetDomain: state.targetDomain,
     targetUrl: state.targetUrl,
   }), [state.businessName, state.targetDomain, state.targetUrl]);
-  const [draftCompetitors, setDraftCompetitors] = useState<string[]>(() => dedupeNames(state.competitorNames));
+  const normalizedStateCompetitors = useMemo(
+    () => normalizeCompetitorNames(filterOutSelfCompetitorNames(state.competitorNames, identity)),
+    [identity, state.competitorNames],
+  );
+  const [draftCompetitors, setDraftCompetitors] = useState<string[]>(normalizedStateCompetitors);
   const [manualCompetitor, setManualCompetitor] = useState('');
   const [competitorMode, setCompetitorMode] = useState(state.strategy.competitorCampaignMode);
 
   const sanitizedCompetitors = useMemo(
-    () => dedupeNames(filterOutSelfCompetitorNames(draftCompetitors, identity)),
+    () => normalizeCompetitorNames(filterOutSelfCompetitorNames(draftCompetitors, identity)),
     [draftCompetitors, identity],
   );
+
+  useEffect(() => {
+    setDraftCompetitors(normalizedStateCompetitors);
+  }, [normalizedStateCompetitors]);
 
   const competitorKeywordRows = useMemo(() => {
     return state.seedKeywords
@@ -79,7 +72,7 @@ export function StepCompetitors() {
       setManualCompetitor('');
       return;
     }
-    setDraftCompetitors((prev) => dedupeNames([...prev, trimmed]));
+    setDraftCompetitors((prev) => normalizeCompetitorNames([...prev, trimmed]));
     setManualCompetitor('');
   };
 
@@ -91,13 +84,9 @@ export function StepCompetitors() {
     const nextCompetitors = sanitizedCompetitors;
     const enriched = enrichSeedKeywordsWithSignals(state.seedKeywords);
     const { selected, suppressed } = applyStrategyFilter(enriched, state.strategy, nextCompetitors);
-    const nextStrategy = {
-      ...state.strategy,
-      competitorCampaignMode: competitorMode,
-    };
 
     dispatch({ type: 'SET_COMPETITOR_NAMES', names: nextCompetitors });
-    dispatch({ type: 'SET_STRATEGY', strategy: nextStrategy });
+    dispatch({ type: 'SET_COMPETITOR_CAMPAIGN_MODE', mode: competitorMode });
     dispatch({ type: 'SET_FILTERED_KEYWORDS', selected, suppressed });
     dispatch({ type: 'SET_STEP', step: 'enhance' });
   };
@@ -120,7 +109,7 @@ export function StepCompetitors() {
         <CardContent className="py-5 space-y-3">
           <div className="flex flex-wrap items-center gap-2">
             <Badge variant="outline">Mode</Badge>
-            <Badge variant="secondary">{draftCompetitors.length} competitors</Badge>
+            <Badge variant="secondary">{sanitizedCompetitors.length} competitors</Badge>
             <Badge variant="secondary">{competitorKeywordRows.length} matched search terms</Badge>
           </div>
           <div className="grid gap-3 sm:grid-cols-2">

@@ -20,6 +20,8 @@ import { mergeKeywordsWithGoogleAdsAuthority } from '@/lib/logic/keyword-merge';
 import { enrichSeedKeywordsWithSignals, applyStrategyFilter } from '@/lib/logic/strategy-filter';
 import { buildReviewNegativeKeywordLists, mergeReviewNegativeKeywordLists } from '@/lib/logic/negative-keywords';
 import { filterOutSelfCompetitorNames } from '@/lib/logic/brand-identity';
+import { extractCompetitorNamesFromUnknown, normalizeCompetitorNames } from '@/lib/logic/competitor-names';
+import { isCompetitorBrand, normalizeKeywordText } from '@/lib/logic/keyword-signals';
 
 type ErrorResponse = { error?: string };
 
@@ -40,14 +42,7 @@ type DiscoverServicesResponse = {
   contextTerms?: string[];
 };
 
-type CompetitorKeywordApi = {
-  text?: string;
-  estimatedVolume?: number;
-  estimatedCpc?: number;
-};
-
 type ResearchCompetitorsResponse = {
-  keywords?: CompetitorKeywordApi[];
   competitors?: Array<{ name?: string; domain?: string; description?: string }>;
 };
 
@@ -159,6 +154,97 @@ type BuildCampaignResponse = {
   negativeKeywordLists: NegativeKeywordList[];
 };
 
+const INFRASTRUCTURE_QUERY_PATTERNS = [
+  /\bwhois\b/i,
+  /\bdomain(?:s| name)?\b/i,
+  /\bdomains for sale\b/i,
+  /\bweb hosting\b/i,
+  /\bhosting\b/i,
+  /\bregistrar\b/i,
+  /\bdns\b/i,
+  /\bnameserver\b/i,
+  /\bcpanel\b/i,
+  /\bssl\b/i,
+  /\bserver\b/i,
+  /\bwebsite\b/i,
+  /\bwordpress\b/i,
+];
+
+const WEAK_SERVICE_HINT_TOKENS = new Set([
+  'and',
+  'best',
+  'buy',
+  'call',
+  'cheap',
+  'company',
+  'companies',
+  'cost',
+  'estimate',
+  'for',
+  'free',
+  'get',
+  'how',
+  'in',
+  'installation',
+  'installer',
+  'installers',
+  'local',
+  'me',
+  'near',
+  'of',
+  'price',
+  'pricing',
+  'quote',
+  'repair',
+  'reviews',
+  'service',
+  'services',
+  'the',
+  'to',
+  'with',
+]);
+
+function isInfrastructureQuery(text: string): boolean {
+  return INFRASTRUCTURE_QUERY_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+function extractServiceHintTokens(values: string[]): string[] {
+  const hints = new Set<string>();
+
+  for (const value of values) {
+    const normalized = normalizeKeywordText(value);
+    if (!normalized) continue;
+
+    for (const token of normalized.split(' ')) {
+      if (token.length < 4) continue;
+      if (WEAK_SERVICE_HINT_TOKENS.has(token)) continue;
+      hints.add(token);
+    }
+  }
+
+  return Array.from(hints);
+}
+
+function matchesServiceHints(keyword: string, hintTokens: string[]): boolean {
+  if (hintTokens.length === 0) return true;
+
+  const normalizedKeyword = normalizeKeywordText(keyword);
+  if (!normalizedKeyword) return false;
+
+  const keywordTokens = new Set(normalizedKeyword.split(' ').filter(Boolean));
+  let matchedTokens = 0;
+
+  for (const token of hintTokens) {
+    if (!keywordTokens.has(token)) continue;
+    matchedTokens += 1;
+    if (matchedTokens >= 2) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 async function getApiErrorMessage(response: Response, fallback: string): Promise<string> {
   try {
     const data = await response.json() as ErrorResponse;
@@ -226,31 +312,40 @@ export function useWorkflowData() {
     try {
       // Step 1: Research competitors via Perplexity — used as seed input only
       onPhase?.('competitors');
-      let perplexitySeedTexts: string[] = [];
       let competitorNames: string[] = [];
-      const competitorRes = await fetch('/api/research-competitors', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          targetUrl: state.targetUrl,
-          targetDomain: state.targetDomain,
-          businessName: state.businessName,
-          services: state.selectedServices,
-          location: geoOverrides?.geoDisplayName ?? state.geoDisplayName,
-          openrouterApiKey,
-        }),
-      });
+      const competitorController = new AbortController();
+      const competitorTimeout = setTimeout(() => competitorController.abort(), 47000);
+      let competitorRes: Response;
+      try {
+        competitorRes = await fetch('/api/research-competitors', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            targetUrl: state.targetUrl,
+            targetDomain: state.targetDomain,
+            businessName: state.businessName,
+            services: state.selectedServices,
+            location: geoOverrides?.geoDisplayName ?? state.geoDisplayName,
+            openrouterApiKey,
+          }),
+          signal: competitorController.signal,
+        });
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') {
+          throw new Error('Perplexity competitor research timed out');
+        }
+        throw error;
+      } finally {
+        clearTimeout(competitorTimeout);
+      }
       if (competitorRes.ok) {
         const competitorData = await competitorRes.json() as ResearchCompetitorsResponse;
-        const competitorKeywords = Array.isArray(competitorData.keywords) ? competitorData.keywords : [];
-        perplexitySeedTexts = competitorKeywords
-          .filter((kw): kw is Required<Pick<CompetitorKeywordApi, 'text'>> & CompetitorKeywordApi => typeof kw.text === 'string' && kw.text.trim().length > 0)
-          .map((kw) => kw.text.trim());
         const competitors = Array.isArray(competitorData.competitors) ? competitorData.competitors : [];
+        const normalizedCompetitors = normalizeCompetitorNames(
+          competitors.flatMap((competitor) => extractCompetitorNamesFromUnknown(competitor)),
+        );
         competitorNames = filterOutSelfCompetitorNames(
-          competitors
-          .map((c) => c.name?.trim())
-          .filter((n): n is string => !!n),
+          normalizedCompetitors,
           {
             businessName: state.businessName,
             targetDomain: state.targetDomain,
@@ -258,24 +353,14 @@ export function useWorkflowData() {
           },
         );
       }
+      if (!competitorRes.ok) {
+        throw new Error(await getApiErrorMessage(competitorRes, 'Failed during competitor research'));
+      }
       dispatch({ type: 'SET_COMPETITOR_NAMES', names: competitorNames });
 
-      // Step 2: Generate keywords via Google Ads — one call per service
-      // Perplexity keywords are used as additional seed input only (no AI-estimated data in results)
+      // Step 2: Generate keywords via Google Ads — one call per service.
+      // The main campaign pool is intentionally driven by service/discovery seeds plus Google Ads data.
       onPhase?.('google');
-      const perplexityByService = new Map<string, string[]>();
-      for (const kwText of perplexitySeedTexts) {
-        for (const svc of state.selectedServices) {
-          const svcLower = svc.toLowerCase();
-          if (kwText.toLowerCase().includes(svcLower) || svcLower.split(' ').some(w => kwText.toLowerCase().includes(w))) {
-            const existing = perplexityByService.get(svc) ?? [];
-            existing.push(kwText);
-            perplexityByService.set(svc, existing);
-            break;
-          }
-        }
-      }
-
       // Find relevant discovery seed keywords for each service
       const discoveredSvcMap = new Map<string, string[]>();
       for (const svc of state.discoveredServices) {
@@ -296,7 +381,6 @@ export function useWorkflowData() {
 
       for (const service of state.selectedServices) {
         const discoverySeeds = discoveredSvcMap.get(service) ?? [];
-        const perplexityForService = (perplexityByService.get(service) ?? []).slice(0, 5);
         const manualSeeds = state.manualSeedKeywords;
 
         // Add context terms from discovery that are relevant to this service
@@ -308,12 +392,17 @@ export function useWorkflowData() {
           );
         });
 
+        const serviceHintTokens = extractServiceHintTokens([
+          service,
+          ...discoverySeeds,
+          ...manualSeeds,
+        ]);
+
         // Build seed list: manual seeds first, then service name, discovery seeds, perplexity seeds, context terms, location combos
         const seedTexts = [
           ...manualSeeds,
           service,
           ...discoverySeeds,
-          ...perplexityForService,
           ...contextSeeds,
           ...topCities.map(city => `${service} ${city}`),
         ].filter(Boolean);
@@ -333,7 +422,12 @@ export function useWorkflowData() {
             const googleData = await googleRes.json() as GoogleKeywordsResponse;
             const keywordRows = Array.isArray(googleData.keywords) ? googleData.keywords : [];
             const parsed = keywordRows
-              .filter((kw): kw is Required<Pick<GoogleKeywordApi, 'text'>> & GoogleKeywordApi => typeof kw.text === 'string' && kw.text.trim().length > 0)
+              .filter((kw): kw is Required<Pick<GoogleKeywordApi, 'text'>> & GoogleKeywordApi => (
+                typeof kw.text === 'string' &&
+                kw.text.trim().length > 0 &&
+                !isInfrastructureQuery(kw.text.trim()) &&
+                matchesServiceHints(kw.text.trim(), serviceHintTokens)
+              ))
               .map((kw) => ({
                 text: kw.text.trim(),
                 volume: typeof kw.volume === 'number' ? kw.volume : 0,
@@ -358,10 +452,7 @@ export function useWorkflowData() {
 
       const competitorSeedTexts = Array.from(
         new Set(
-          [
-            ...competitorNames,
-            ...perplexitySeedTexts,
-          ]
+          competitorNames
             .map((value) => value.trim())
             .filter(Boolean)
         )
@@ -384,7 +475,12 @@ export function useWorkflowData() {
             const googleData = await googleRes.json() as GoogleKeywordsResponse;
             const keywordRows = Array.isArray(googleData.keywords) ? googleData.keywords : [];
             const parsed = keywordRows
-              .filter((kw): kw is Required<Pick<GoogleKeywordApi, 'text'>> & GoogleKeywordApi => typeof kw.text === 'string' && kw.text.trim().length > 0)
+              .filter((kw): kw is Required<Pick<GoogleKeywordApi, 'text'>> & GoogleKeywordApi => (
+                typeof kw.text === 'string' &&
+                kw.text.trim().length > 0 &&
+                !isInfrastructureQuery(kw.text.trim()) &&
+                Boolean(isCompetitorBrand(kw.text.trim(), competitorNames))
+              ))
               .map((kw) => ({
                 text: kw.text.trim(),
                 volume: typeof kw.volume === 'number' ? kw.volume : 0,
@@ -427,9 +523,8 @@ export function useWorkflowData() {
     dispatch({ type: 'SET_PROCESSING', isProcessing: true });
     dispatch({ type: 'SET_ERROR', error: null });
 
-    // Split keywords into chunks to keep each HTTP request under browser timeout (~45s).
-    // Each chunk is processed by the server which itself batches + parallelizes internally.
-    const CHUNK_SIZE = 200;
+    // Keep each request small enough that one phase cannot outgrow the client timeout.
+    const CHUNK_SIZE = 80;
     function chunkKeywords(kws: SeedKeyword[]): SeedKeyword[][] {
       const chunks: SeedKeyword[][] = [];
       for (let i = 0; i < kws.length; i += CHUNK_SIZE) {
@@ -443,6 +538,20 @@ export function useWorkflowData() {
       keywords: SeedKeyword[],
       extra?: Record<string, unknown>,
     ): Promise<SeedKeyword[]> {
+      async function withTimeout<T>(label: string, ms: number, run: () => Promise<T>): Promise<T> {
+        let timeoutId: ReturnType<typeof setTimeout> | null = null;
+        try {
+          return await Promise.race([
+            run(),
+            new Promise<T>((_, reject) => {
+              timeoutId = setTimeout(() => reject(new Error(`${label} timed out`)), ms);
+            }),
+          ]);
+        } finally {
+          if (timeoutId) clearTimeout(timeoutId);
+        }
+      }
+
       const chunks = chunkKeywords(keywords);
       const results: SeedKeyword[] = [];
       for (const chunk of chunks) {
@@ -457,24 +566,27 @@ export function useWorkflowData() {
         };
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 20000);
-        let res: Response;
-        try {
-          res = await fetch('/api/enhance', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-            signal: controller.signal,
-          });
-        } catch (error) {
-          if (error instanceof DOMException && error.name === 'AbortError') {
-            throw new Error(`AI ${phase} phase timed out`);
+        const res = await withTimeout(`AI ${phase} phase`, 22000, async () => {
+          try {
+            return await fetch('/api/enhance', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload),
+              signal: controller.signal,
+            });
+          } catch (error) {
+            if (error instanceof DOMException && error.name === 'AbortError') {
+              throw new Error(`AI ${phase} phase timed out`);
+            }
+            throw error;
+          } finally {
+            clearTimeout(timeout);
           }
-          throw error;
-        } finally {
-          clearTimeout(timeout);
-        }
+        });
         if (!res.ok) throw new Error(await getApiErrorMessage(res, `Failed at ${phase} phase`));
-        const data = await res.json() as EnhancePhaseResponse;
+        const data = await withTimeout(`AI ${phase} response parsing`, 5000, async () => (
+          await res.json() as EnhancePhaseResponse
+        ));
         results.push(...data.keywords);
       }
       return results;

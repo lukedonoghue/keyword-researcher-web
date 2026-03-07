@@ -90,16 +90,22 @@ function chunkArray<T>(arr: T[], size: number): T[][] {
 async function runBatchesConcurrently<TBatch, TResult>(
   batches: TBatch[][],
   processBatch: (batch: TBatch[]) => Promise<TResult | null>,
-): Promise<TResult[]> {
+): Promise<{ results: TResult[]; attempted: number; succeeded: number }> {
   const results: TResult[] = [];
+  let attempted = 0;
+  let succeeded = 0;
   for (let i = 0; i < batches.length; i += MAX_CONCURRENT_BATCHES) {
     const concurrent = batches.slice(i, i + MAX_CONCURRENT_BATCHES);
+    attempted += concurrent.length;
     const batchResults = await Promise.all(concurrent.map(processBatch));
     for (const r of batchResults) {
-      if (r) results.push(r);
+      if (r) {
+        results.push(r);
+        succeeded++;
+      }
     }
   }
-  return results;
+  return { results, attempted, succeeded };
 }
 
 function buildKeywordMap(keywords: SeedKeyword[]): Map<string, SeedKeyword> {
@@ -205,7 +211,7 @@ export async function runIntentPhase(
     text: kw.text, currentIntent: kw.intent || 'unknown', isNegative: kw.isNegativeCandidate || false,
   }));
 
-  await runBatchesConcurrently(chunkArray(intentItems, BATCH_SIZE), async (batch) => {
+  const intentBatchState = await runBatchesConcurrently(chunkArray(intentItems, BATCH_SIZE), async (batch) => {
     try {
       const { data, usage } = await client.jsonPrompt<IntentPassResult>(
         `You are a PPC keyword intent classifier for a ${targetDomain} business offering these services: ${services.join(', ')}.
@@ -239,6 +245,10 @@ Return JSON: { "keywords": [{ "text": string, "intent": "transactional"|"commerc
     } catch { return null; }
   });
 
+  if (intentBatchState.attempted > 0 && intentBatchState.succeeded === 0) {
+    throw new Error('Intent classification failed for every AI batch');
+  }
+
   return {
     keywords: extractKeywords(keywordMap),
     stats: { model, intentChanges, themesReassigned: 0, negativesReclassified, qualityAdjustments: 0, totalTokens },
@@ -264,7 +274,7 @@ export async function runThemesPhase(
   const keySet = new Set(keywords.map((kw) => kw.text.toLowerCase()));
   const themeItems = keywords.map((kw) => ({ text: kw.text, currentThemes: kw.themes || ['General'] }));
 
-  await runBatchesConcurrently(chunkArray(themeItems, BATCH_SIZE), async (batch) => {
+  const themeBatchState = await runBatchesConcurrently(chunkArray(themeItems, BATCH_SIZE), async (batch) => {
     try {
       const { data, usage } = await client.jsonPrompt<ThemePassResult>(
         `You are a PPC keyword theme organizer for a business offering: ${services.join(', ')}.
@@ -289,6 +299,10 @@ Every input keyword must appear in exactly one cluster.`,
       return data;
     } catch { return null; }
   });
+
+  if (themeBatchState.attempted > 0 && themeBatchState.succeeded === 0) {
+    throw new Error('Theme clustering failed for every AI batch');
+  }
 
   return {
     keywords: extractKeywords(keywordMap),
@@ -326,7 +340,7 @@ export async function runQualityPhase(
     intent: kw.intent || 'unknown',
   }));
 
-  await runBatchesConcurrently(chunkArray(qualityItems, BATCH_SIZE), async (batch) => {
+  const qualityBatchState = await runBatchesConcurrently(chunkArray(qualityItems, BATCH_SIZE), async (batch) => {
     try {
       const { data, usage } = await client.jsonPrompt<QualityPassResult>(
         `You are a PPC quality scoring expert for ${targetDomain} (services: ${services.join(', ')}).
@@ -358,6 +372,10 @@ Return JSON: { "adjustments": [{ "text": string, "adjustment": number (-15 to +1
       return data;
     } catch { return null; }
   });
+
+  if (qualityBatchState.attempted > 0 && qualityBatchState.succeeded === 0) {
+    throw new Error('Quality scoring failed for every AI batch');
+  }
 
   // Apply heuristic quality scores to keywords not adjusted by AI
   for (const kw of keywordMap.values()) {

@@ -2,6 +2,22 @@ import { NextRequest, NextResponse } from 'next/server';
 import { PerplexityService } from '@/lib/services/perplexity';
 import { getErrorMessage } from '@/lib/utils';
 
+const COMPETITOR_RESEARCH_TIMEOUT_MS = 45000;
+
+async function withTimeout<T>(label: string, ms: number, run: () => Promise<T>): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race([
+      run(),
+      new Promise<T>((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error(`${label} exceeded ${ms / 1000}s`)), ms);
+      }),
+    ]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
+
 export async function POST(request: NextRequest) {
   try {
     const payload = await request.json() as {
@@ -27,7 +43,11 @@ export async function POST(request: NextRequest) {
     }
 
     const service = new PerplexityService(openrouterApiKey);
-    const result = await service.researchCompetitors(targetUrl, services, location, businessName, targetDomain);
+    const result = await withTimeout(
+      'Perplexity competitor research',
+      COMPETITOR_RESEARCH_TIMEOUT_MS,
+      () => service.researchCompetitors(targetUrl, services, location, businessName, targetDomain),
+    );
     return NextResponse.json(result);
   } catch (error: unknown) {
     console.error('Error researching competitors:', error);

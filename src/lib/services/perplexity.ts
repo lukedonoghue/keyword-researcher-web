@@ -8,6 +8,7 @@ import {
   type BusinessMessagingResponse,
 } from '../logic/business-analyzer';
 import { filterOutSelfCompetitors } from '../logic/brand-identity';
+import { normalizeCompetitorNames } from '../logic/competitor-names';
 import type { ServiceArea } from '../types/geo';
 import type { WebsiteMessagingProfile } from '../types/index';
 
@@ -136,11 +137,16 @@ export class PerplexityService {
     const seenNames = new Set<string>();
 
     return competitors
-      .map((competitor) => ({
-        name: competitor.name?.trim() || competitor.domain?.trim() || 'Unknown competitor',
-        domain: competitor.domain?.trim().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '') || '',
-        description: competitor.description?.trim() || '',
-      }))
+      .flatMap((competitor) => {
+        const domain = competitor.domain?.trim().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '') || '';
+        const names = normalizeCompetitorNames([competitor.name?.trim() || domain || '']);
+        if (names.length === 0) return [];
+        return names.map((name) => ({
+          name,
+          domain,
+          description: competitor.description?.trim() || '',
+        }));
+      })
       .filter((competitor) => {
         const domainKey = competitor.domain.toLowerCase();
         const nameKey = competitor.name.toLowerCase();

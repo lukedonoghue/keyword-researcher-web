@@ -16,14 +16,24 @@ import { PhaseRow } from './phase-row';
 export function StepEnhance() {
   const { state, dispatch } = useWorkflow();
   const { enhanceKeywords, isProcessing, error } = useWorkflowData();
-  const [phase, setPhase] = useState<'intent' | 'themes' | 'quality' | 'done'>('intent');
+  const hasKeywordsToEnhance = state.selectedKeywords.length > 0 || state.suppressedKeywords.length > 0;
+  const hasResearchState = hasKeywordsToEnhance || state.seedKeywords.length > 0;
+  const [phase, setPhase] = useState<'idle' | 'intent' | 'themes' | 'quality' | 'done'>(
+    state.enhancedKeywords.length > 0 ? 'done' : 'idle'
+  );
+  const [phaseStartedAt, setPhaseStartedAt] = useState<number | null>(null);
+  const [phaseTick, setPhaseTick] = useState(0);
   const [selectedIntent, setSelectedIntent] = useState<KeywordIntent | 'unknown' | 'all'>('all');
   const startedRef = useRef(false);
+  const displayPhase = state.enhancedKeywords.length > 0 ? 'done' : phase;
+  const phaseElapsedSeconds = phaseStartedAt ? Math.floor((phaseTick - phaseStartedAt) / 1000) : 0;
 
   const runEnhance = useCallback(async (force: boolean = false) => {
     if (!force && startedRef.current) return;
     startedRef.current = true;
     try {
+      setPhaseStartedAt(Date.now());
+      setPhaseTick(Date.now());
       setPhase('intent');
       await enhanceKeywords(state.selectedKeywords, state.suppressedKeywords, (p) => {
         if (p === 'themes') setPhase('themes');
@@ -32,15 +42,17 @@ export function StepEnhance() {
       });
       setPhase('done');
     } catch {
-      // Error handled by useWorkflowData
+      setPhase(state.enhancedKeywords.length > 0 ? 'done' : 'idle');
+    } finally {
+      setPhaseStartedAt(null);
     }
-  }, [enhanceKeywords, state.selectedKeywords, state.suppressedKeywords]);
+  }, [enhanceKeywords, state.enhancedKeywords.length, state.selectedKeywords, state.suppressedKeywords]);
 
   useEffect(() => {
     if (
       startedRef.current ||
       state.enhancedKeywords.length > 0 ||
-      state.selectedKeywords.length === 0
+      !hasKeywordsToEnhance
     ) {
       return;
     }
@@ -48,9 +60,21 @@ export function StepEnhance() {
       void runEnhance();
     }, 0);
     return () => clearTimeout(timer);
-  }, [runEnhance, state.enhancedKeywords.length, state.selectedKeywords.length]);
+  }, [hasKeywordsToEnhance, runEnhance, state.enhancedKeywords.length]);
 
-  const progressPercent = { intent: 33, themes: 66, quality: 85, done: 100 }[phase];
+  useEffect(() => {
+    if (!isProcessing || phaseStartedAt === null) {
+      return;
+    }
+
+    const timer = setInterval(() => {
+      setPhaseTick(Date.now());
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [isProcessing, phaseStartedAt]);
+
+  const progressPercent = { idle: 0, intent: 33, themes: 66, quality: 85, done: 100 }[displayPhase];
 
   const intentBreakdown = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -102,19 +126,60 @@ export function StepEnhance() {
         <CardContent className="py-6 space-y-4">
           <Progress value={progressPercent} className="h-1.5" />
           <div className="space-y-2">
-            <PhaseRow label="Intent classification" active={phase === 'intent'} done={['themes', 'quality', 'done'].includes(phase)} />
-            <PhaseRow label="Theme clustering" active={phase === 'themes'} done={['quality', 'done'].includes(phase)} />
-            <PhaseRow label="Quality score adjustment" active={phase === 'quality'} done={phase === 'done'} />
+            <PhaseRow label="Intent classification" active={displayPhase === 'intent'} done={['themes', 'quality', 'done'].includes(displayPhase)} />
+            <PhaseRow label="Theme clustering" active={displayPhase === 'themes'} done={['quality', 'done'].includes(displayPhase)} />
+            <PhaseRow label="Quality score adjustment" active={displayPhase === 'quality'} done={displayPhase === 'done'} />
           </div>
           {isProcessing && (
             <p className="text-[11px] text-muted-foreground">
-              Applying AI adjustments...
+              Applying AI adjustments{phaseElapsedSeconds > 0 ? `... ${phaseElapsedSeconds}s` : '...'}
+            </p>
+          )}
+          {isProcessing && phaseElapsedSeconds >= 12 && (
+            <p className="text-[11px] text-amber-600 dark:text-amber-400">
+              This phase is taking longer than expected. The request should fail with an error instead of hanging indefinitely.
+            </p>
+          )}
+          {!isProcessing && displayPhase === 'idle' && !error && (
+            <p className="text-[11px] text-muted-foreground">
+              No researched keywords are loaded for AI enhancement yet.
             </p>
           )}
         </CardContent>
       </Card>
 
-      {phase === 'done' && state.enhancedKeywords.length > 0 && (
+      {!hasKeywordsToEnhance && !isProcessing && !error && (
+        <Card className="border-border/70 border-dashed">
+          <CardContent className="py-5 space-y-3">
+            <p className="text-sm font-medium">AI enhancement cannot run yet.</p>
+            <p className="text-xs text-muted-foreground">
+              {hasResearchState
+                ? 'Your current filters produced no selected or suppressed keywords to enhance.'
+                : 'This session does not have researched keywords loaded. Go back to Research and rerun the keyword pipeline.'}
+            </p>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8"
+                onClick={() => dispatch({ type: 'SET_STEP', step: 'research' })}
+              >
+                Go to Research
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8"
+                onClick={() => dispatch({ type: 'SET_STEP', step: 'competitors' })}
+              >
+                Back to Competitors
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {displayPhase === 'done' && state.enhancedKeywords.length > 0 && (
         <Card className="border-green-200 bg-green-50 dark:border-green-800/60 dark:bg-green-950/40 dark:card-glow-success">
           <CardContent className="py-5 space-y-4">
             <p className="text-sm font-medium text-green-800 dark:text-green-200">
@@ -233,17 +298,7 @@ export function StepEnhance() {
         >
           Back
         </Button>
-        {error && !isProcessing && phase !== 'done' && (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-8 text-muted-foreground"
-            onClick={() => dispatch({ type: 'SET_STEP', step: 'review' })}
-          >
-            Continue without AI
-          </Button>
-        )}
-        {phase === 'done' && (
+        {displayPhase === 'done' && (
           <Button
             variant="brand"
             size="sm"
