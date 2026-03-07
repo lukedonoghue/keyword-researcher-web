@@ -21,42 +21,6 @@ type AccountsResponse = {
   error?: string;
 };
 
-type AccountOption = {
-  customerId: string;
-  descriptiveName: string;
-  label: string;
-};
-
-function collectLeafAccounts(node: GoogleAdsAccountNode, path: string[]): AccountOption[] {
-  const nextPath = [...path, node.descriptiveName];
-  if (!node.isManager) {
-    return [{
-      customerId: node.customerId,
-      descriptiveName: node.descriptiveName,
-      label: `${nextPath.join(' / ')} (${node.customerId})`,
-    }];
-  }
-
-  return node.children.flatMap((child) => collectLeafAccounts(child, nextPath));
-}
-
-function findNodePath(nodes: GoogleAdsAccountNode[], targetCustomerId: string | null): string[] {
-  if (!targetCustomerId) return [];
-
-  for (const node of nodes) {
-    if (node.customerId === targetCustomerId) {
-      return [node.customerId];
-    }
-
-    const childPath = findNodePath(node.children, targetCustomerId);
-    if (childPath.length > 0) {
-      return [node.customerId, ...childPath];
-    }
-  }
-
-  return [];
-}
-
 function findNodeById(nodes: GoogleAdsAccountNode[], customerId: string): GoogleAdsAccountNode | null {
   for (const node of nodes) {
     if (node.customerId === customerId) return node;
@@ -65,6 +29,13 @@ function findNodeById(nodes: GoogleAdsAccountNode[], customerId: string): Google
   }
   return null;
 }
+
+type ScopeLevel = {
+  level: number;
+  managerNode: GoogleAdsAccountNode | null;
+  accounts: GoogleAdsAccountNode[];
+  managers: GoogleAdsAccountNode[];
+};
 
 export function AccountSelector() {
   const {
@@ -82,8 +53,10 @@ export function AccountSelector() {
   const [loading, setLoading] = useState(true);
   const [submittingId, setSubmittingId] = useState('');
   const [error, setError] = useState('');
-  const [selectedNodePath, setSelectedNodePath] = useState<string[]>([]);
-  const [searchQueries, setSearchQueries] = useState<string[]>([]);
+  const [selectedManagerPath, setSelectedManagerPath] = useState<string[]>([]);
+  const [selectedAccountId, setSelectedAccountId] = useState<string>('');
+  const [accountSearchQueries, setAccountSearchQueries] = useState<string[]>([]);
+  const [managerSearchQueries, setManagerSearchQueries] = useState<string[]>([]);
   const [initialized, setInitialized] = useState(false);
 
   useEffect(() => {
@@ -133,98 +106,89 @@ export function AccountSelector() {
 
   useEffect(() => {
     if (initialized || hierarchy.length === 0) return;
-
-    const fullPath = findNodePath(hierarchy, currentCustomerId);
-    if (fullPath.length > 0) {
-      setSelectedNodePath(fullPath);
-    } else {
-      setSelectedNodePath([]);
-    }
-
+    setSelectedManagerPath([]);
+    setSelectedAccountId('');
+    setAccountSearchQueries([]);
+    setManagerSearchQueries([]);
     setInitialized(true);
-  }, [currentCustomerId, hierarchy, initialized]);
+  }, [hierarchy, initialized]);
 
-  const levelGroups = useMemo(() => {
-    const levels: Array<{
-      level: number;
-      options: GoogleAdsAccountNode[];
-    }> = [];
-
+  const scopeLevels = useMemo(() => {
+    const levels: ScopeLevel[] = [];
     let currentNodes = hierarchy;
-    let level = 0;
+    let managerNode: GoogleAdsAccountNode | null = null;
 
-    while (currentNodes.length > 0) {
-      levels.push({ level, options: currentNodes });
+    for (let level = 0; ; level += 1) {
+      const accounts = currentNodes.filter((node) => !node.isManager);
+      const managers = currentNodes.filter((node) => node.isManager);
 
-      const selectedNodeId = selectedNodePath[level];
-      const selectedNode = currentNodes.find((node) => node.customerId === selectedNodeId);
-      if (!selectedNode || !selectedNode.isManager) break;
+      levels.push({ level, managerNode, accounts, managers });
 
-      currentNodes = selectedNode.children;
-      level += 1;
+      const nextManagerId = selectedManagerPath[level];
+      if (!nextManagerId) break;
+
+      const nextManager = currentNodes.find((node) => node.customerId === nextManagerId && node.isManager);
+      if (!nextManager) break;
+
+      managerNode = nextManager;
+      currentNodes = nextManager.children;
     }
 
     return levels;
-  }, [hierarchy, selectedNodePath]);
+  }, [hierarchy, selectedManagerPath]);
 
-  const selectedNodes = useMemo(
+  const selectedManagerNodes = useMemo(
     () =>
-      selectedNodePath
+      selectedManagerPath
         .map((nodeId) => findNodeById(hierarchy, nodeId))
-        .filter((node): node is GoogleAdsAccountNode => Boolean(node)),
-    [hierarchy, selectedNodePath],
+        .filter((node): node is GoogleAdsAccountNode => node !== null && node.isManager),
+    [hierarchy, selectedManagerPath],
   );
 
   const selectedLeafNode = useMemo(() => {
-    const lastNode = selectedNodes[selectedNodes.length - 1];
-    if (!lastNode || lastNode.isManager) return null;
-    return lastNode;
-  }, [selectedNodes]);
+    if (!selectedAccountId) return null;
+    const node = findNodeById(hierarchy, selectedAccountId);
+    return node && !node.isManager ? node : null;
+  }, [hierarchy, selectedAccountId]);
 
   const activeManagerContext = useMemo(() => {
-    const managerChain = selectedNodes.filter((node) => node.isManager);
-    return managerChain[managerChain.length - 1] ?? null;
-  }, [selectedNodes]);
+    return selectedManagerNodes[selectedManagerNodes.length - 1] ?? null;
+  }, [selectedManagerNodes]);
 
-  const currentScopeOptions = useMemo(() => {
-    const lastSelectedNode = selectedNodes[selectedNodes.length - 1];
-    if (lastSelectedNode?.isManager) {
-      return lastSelectedNode.children;
-    }
-
-    if (selectedNodes.length >= 2) {
-      const parentNode = selectedNodes[selectedNodes.length - 2];
-      if (parentNode?.isManager) return parentNode.children;
-    }
-
-    return hierarchy;
-  }, [hierarchy, selectedNodes]);
-
-  const directAccountCount = useMemo(
-    () => currentScopeOptions.filter((node) => !node.isManager).length,
-    [currentScopeOptions],
-  );
-
-  const directManagerCount = useMemo(
-    () => currentScopeOptions.filter((node) => node.isManager).length,
-    [currentScopeOptions],
-  );
+  const currentScope = scopeLevels[scopeLevels.length - 1] ?? null;
 
   const selectionBreadcrumb = useMemo(() => {
-    const labels = selectedNodes.map((node) => node.descriptiveName);
+    const labels = selectedManagerNodes.map((node) => node.descriptiveName);
 
     return labels
       .filter((label): label is string => Boolean(label))
       .join(' / ');
-  }, [selectedNodes]);
+  }, [selectedManagerNodes]);
 
-  const handleLevelChange = (level: number, nodeId: string) => {
-    setSelectedNodePath((prev) => [...prev.slice(0, level), nodeId]);
-    setSearchQueries((prev) => prev.slice(0, level + 1));
+  const handleManagerChange = (level: number, nodeId: string) => {
+    setSelectedManagerPath((prev) => [...prev.slice(0, level), nodeId]);
+    setSelectedAccountId('');
+    setAccountSearchQueries((prev) => prev.slice(0, level + 1));
+    setManagerSearchQueries((prev) => prev.slice(0, level + 1));
   };
 
-  const handleSearchChange = (level: number, query: string) => {
-    setSearchQueries((prev) => {
+  const handleAccountChange = (level: number, nodeId: string) => {
+    setSelectedManagerPath((prev) => prev.slice(0, level));
+    setSelectedAccountId(nodeId);
+    setAccountSearchQueries((prev) => prev.slice(0, level + 1));
+    setManagerSearchQueries((prev) => prev.slice(0, level + 1));
+  };
+
+  const handleAccountSearchChange = (level: number, query: string) => {
+    setAccountSearchQueries((prev) => {
+      const next = [...prev];
+      next[level] = query;
+      return next;
+    });
+  };
+
+  const handleManagerSearchChange = (level: number, query: string) => {
+    setManagerSearchQueries((prev) => {
       const next = [...prev];
       next[level] = query;
       return next;
@@ -290,52 +254,98 @@ export function AccountSelector() {
         </p>
       </div>
 
-      <div className="grid gap-3 md:grid-cols-2">
-        {levelGroups.map(({ level, options }) => (
-          <div key={`manager-level-${level}`} className="space-y-2">
-            <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">
-              {level === 0 ? 'Select Account or MCC' : `Child Level ${level + 1}`}
-            </p>
-            <Input
-              value={searchQueries[level] ?? ''}
-              onChange={(event) => handleSearchChange(level, event.target.value)}
-              placeholder="Search by account name or ID"
-              className="h-8 text-xs"
-            />
-            <Select
-              value={selectedNodePath[level] ?? ''}
-              onValueChange={(value) => handleLevelChange(level, value)}
-            >
-              <SelectTrigger size="sm" className="h-9 text-xs">
-                <SelectValue placeholder={level === 0 ? 'Select account or MCC' : 'Select child account or MCC'} />
-              </SelectTrigger>
-              <SelectContent>
-                {options
-                  .filter((node) => {
-                    if (node.customerId === selectedNodePath[level]) return true;
-                    const query = (searchQueries[level] ?? '').trim().toLowerCase();
-                    if (!query) return true;
-                    const haystack = `${node.descriptiveName} ${node.customerId}`.toLowerCase();
-                    return haystack.includes(query);
-                  })
-                  .map((node) => {
-                  const descendantCount = node.isManager ? collectLeafAccounts(node, []).length : 0;
-                  return (
-                    <SelectItem key={node.customerId} value={node.customerId}>
-                      {node.isManager ? `MCC · ${node.descriptiveName} (${descendantCount} accounts)` : `Account · ${node.descriptiveName}`}
-                    </SelectItem>
-                  );
-                })}
-              </SelectContent>
-            </Select>
-          </div>
-        ))}
+      <div className="space-y-4">
+        {scopeLevels.map(({ level, managerNode, accounts, managers }) => {
+          const accountValue =
+            selectedLeafNode && level === selectedManagerPath.length
+              ? selectedLeafNode.customerId
+              : '';
+          const managerValue = selectedManagerPath[level] ?? '';
+          const accountQuery = (accountSearchQueries[level] ?? '').trim().toLowerCase();
+          const managerQuery = (managerSearchQueries[level] ?? '').trim().toLowerCase();
+          const filteredAccounts = accounts.filter((node) => {
+            if (node.customerId === accountValue) return true;
+            if (!accountQuery) return true;
+            return `${node.descriptiveName} ${node.customerId}`.toLowerCase().includes(accountQuery);
+          });
+          const filteredManagers = managers.filter((node) => {
+            if (node.customerId === managerValue) return true;
+            if (!managerQuery) return true;
+            return `${node.descriptiveName} ${node.customerId}`.toLowerCase().includes(managerQuery);
+          });
+
+          return (
+            <div key={`scope-level-${level}`} className="grid gap-3 md:grid-cols-2">
+              <div className="space-y-2">
+                <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">
+                  {level === 0 ? 'Direct Accounts' : `Accounts In ${managerNode?.descriptiveName ?? `Level ${level + 1}`}`}
+                </p>
+                <Input
+                  value={accountSearchQueries[level] ?? ''}
+                  onChange={(event) => handleAccountSearchChange(level, event.target.value)}
+                  placeholder="Search by account name or ID"
+                  className="h-8 text-xs"
+                />
+                <Select
+                  value={accountValue}
+                  onValueChange={(value) => handleAccountChange(level, value)}
+                >
+                  <SelectTrigger size="sm" className="h-9 text-xs">
+                    <SelectValue placeholder={level === 0 ? 'Select direct account' : 'Select direct child account'} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {filteredAccounts.length > 0 ? filteredAccounts.map((node) => (
+                      <SelectItem key={node.customerId} value={node.customerId}>
+                        {`${node.descriptiveName} (${node.customerId})`}
+                      </SelectItem>
+                    )) : (
+                      <SelectItem value="__no_accounts__" disabled>
+                        No direct accounts in this scope
+                      </SelectItem>
+                    )}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
+                <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">
+                  {level === 0 ? 'Child MCCs' : `Child MCCs In ${managerNode?.descriptiveName ?? `Level ${level + 1}`}`}
+                </p>
+                <Input
+                  value={managerSearchQueries[level] ?? ''}
+                  onChange={(event) => handleManagerSearchChange(level, event.target.value)}
+                  placeholder="Search by MCC name or ID"
+                  className="h-8 text-xs"
+                />
+                <Select
+                  value={managerValue}
+                  onValueChange={(value) => handleManagerChange(level, value)}
+                >
+                  <SelectTrigger size="sm" className="h-9 text-xs">
+                    <SelectValue placeholder={level === 0 ? 'Select child MCC' : 'Select nested MCC'} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {filteredManagers.length > 0 ? filteredManagers.map((node) => (
+                      <SelectItem key={node.customerId} value={node.customerId}>
+                        {`MCC · ${node.descriptiveName} (${node.children.length} children)`}
+                      </SelectItem>
+                    )) : (
+                      <SelectItem value="__no_mccs__" disabled>
+                        No child MCCs in this scope
+                      </SelectItem>
+                    )}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          );
+        })}
       </div>
 
       <div className="rounded-lg border border-border/70 bg-card/40 px-3 py-3">
         <div className="flex flex-wrap items-center gap-2">
-          <Badge variant="secondary">{directAccountCount} direct accounts</Badge>
-          <Badge variant="secondary">{directManagerCount} child MCCs</Badge>
+          <Badge variant="secondary">{currentScope?.accounts.length ?? 0} direct accounts</Badge>
+          <Badge variant="secondary">{currentScope?.managers.length ?? 0} child MCCs</Badge>
           {selectionBreadcrumb && (
             <span className="text-xs text-muted-foreground">
               Current path: {selectionBreadcrumb}
