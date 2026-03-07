@@ -156,18 +156,31 @@ export function StepStrategy() {
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="grid grid-cols-1 gap-4 md:grid-cols-[220px_1fr]">
-            <div className="space-y-1">
-              <Label className="text-xs">Campaign Goal</Label>
-              <Select value={strategy.goal} onValueChange={(v) => update({ goal: v as CampaignStrategy['goal'] })}>
-                <SelectTrigger className="h-8 text-xs">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="conversions" className="text-xs">Conversions</SelectItem>
-                  <SelectItem value="traffic" className="text-xs">Traffic</SelectItem>
-                  <SelectItem value="awareness" className="text-xs">Awareness</SelectItem>
-                </SelectContent>
-              </Select>
+            <div className="space-y-4">
+              <div className="space-y-1">
+                <Label className="text-xs">Campaign Goal</Label>
+                <Select value={strategy.goal} onValueChange={(v) => update({ goal: v as CampaignStrategy['goal'] })}>
+                  <SelectTrigger className="h-8 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="conversions" className="text-xs">Conversions</SelectItem>
+                    <SelectItem value="traffic" className="text-xs">Traffic</SelectItem>
+                    <SelectItem value="awareness" className="text-xs">Awareness</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-1">
+                <Label className="text-xs">Min Search Volume</Label>
+                <Input
+                  type="number"
+                  value={strategy.minVolume}
+                  onChange={(e) => update({ minVolume: Number(e.target.value) })}
+                  className="h-8 text-xs"
+                />
+                <p className="text-[11px] text-muted-foreground">Minimum monthly searches. Lower = more keywords.</p>
+              </div>
             </div>
 
             <div className="space-y-3 rounded-lg border border-border/70 bg-muted/10 px-4 py-3">
@@ -214,17 +227,6 @@ export function StepStrategy() {
                 Set pacing in daily spend. The workflow stores this as monthly budget underneath for filtering and campaign recommendations.
               </p>
             </div>
-          </div>
-
-          <div className="space-y-1">
-            <Label className="text-xs">Min Search Volume</Label>
-            <Input
-              type="number"
-              value={strategy.minVolume}
-              onChange={(e) => update({ minVolume: Number(e.target.value) })}
-              className="h-8 text-xs w-1/2"
-            />
-            <p className="text-[11px] text-muted-foreground">Minimum monthly searches. Lower = more keywords.</p>
           </div>
         </CardContent>
       </Card>

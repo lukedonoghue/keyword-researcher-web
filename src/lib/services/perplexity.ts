@@ -7,6 +7,7 @@ import {
   type BusinessAnalysisResponse,
   type BusinessMessagingResponse,
 } from '../logic/business-analyzer';
+import { filterOutSelfCompetitors } from '../logic/brand-identity';
 import type { ServiceArea } from '../types/geo';
 import type { WebsiteMessagingProfile } from '../types/index';
 
@@ -198,13 +199,16 @@ export class PerplexityService {
   async researchCompetitors(
     targetUrl: string,
     services: string[],
-    location?: string
+    location?: string,
+    businessName?: string,
+    targetDomain?: string,
   ): Promise<CompetitorResearchResult> {
     this.client.setModel('perplexity/sonar-pro');
 
     try {
       const totalUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
       const locationCtx = location ? ` in ${location}` : '';
+      const sourceIdentity = businessName?.trim() || targetDomain?.trim() || targetUrl;
 
       // Step 1: Find competitors through multiple localized passes
       const competitorSystemPrompt = `You are a competitive intelligence analyst. Find as many strong direct competitors as you can verify for the given business, aiming for 20-50 when the market supports it.
@@ -212,6 +216,7 @@ Return JSON: { "competitors": [{ "name": string, "domain": string, "description"
 Focus on direct competitors offering similar services in the same market${locationCtx}.
 Prefer local and regional competitors over directories or marketplaces.
 Exclude lead aggregators, directories, review sites, and suppliers that do not directly deliver the service.
+Never include the source business itself (${sourceIdentity}), its own website, or obvious spelling/domain variants of the same brand.
 Return up to ${MAX_COMPETITORS} competitors.`;
 
       const discoveredCompetitors: CompetitorInfo[] = [];
@@ -228,7 +233,10 @@ Return up to ${MAX_COMPETITORS} competitors.`;
           break;
         }
       }
-      const competitors = this.normalizeCompetitors(discoveredCompetitors);
+      const competitors = filterOutSelfCompetitors(
+        this.normalizeCompetitors(discoveredCompetitors),
+        { businessName, targetDomain, targetUrl },
+      );
 
       // Step 2: Extract competitor keywords (10-15 per service)
       const competitorDomains = competitors

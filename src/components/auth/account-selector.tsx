@@ -26,6 +26,8 @@ type AccountOption = {
   label: string;
 };
 
+const PARENT_SCOPE_PREFIX = '__parent_scope__:';
+
 function collectLeafAccounts(node: GoogleAdsAccountNode, path: string[]): AccountOption[] {
   const nextPath = [...path, node.descriptiveName];
   if (!node.isManager) {
@@ -217,6 +219,12 @@ export function AccountSelector() {
   }, [hierarchy, selectedManagerPath]);
 
   const handleManagerChange = (level: number, managerId: string) => {
+    if (managerId.startsWith(PARENT_SCOPE_PREFIX)) {
+      setSelectedManagerPath((prev) => prev.slice(0, level));
+      setSelectedAccountId('');
+      return;
+    }
+
     setSelectedManagerPath((prev) => [...prev.slice(0, level), managerId]);
     setSelectedAccountId('');
   };
@@ -285,13 +293,18 @@ export function AccountSelector() {
               MCC Level {level + 1}
             </p>
             <Select
-              value={selectedManagerPath[level] || undefined}
+              value={selectedManagerPath[level] ?? ''}
               onValueChange={(value) => handleManagerChange(level, value)}
             >
               <SelectTrigger size="sm" className="h-9 text-xs">
                 <SelectValue placeholder={`Select MCC level ${level + 1}`} />
               </SelectTrigger>
               <SelectContent>
+                {level > 0 && (
+                  <SelectItem value={`${PARENT_SCOPE_PREFIX}${level}`}>
+                    Use {findNodeById(hierarchy, selectedManagerPath[level - 1])?.descriptiveName || `MCC level ${level}`} scope
+                  </SelectItem>
+                )}
                 {options.map((node) => {
                   const descendantCount = collectLeafAccounts(node, []).length;
                   return (
@@ -309,7 +322,7 @@ export function AccountSelector() {
           <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">
             Ad Account
           </p>
-          <Select value={selectedAccountId || undefined} onValueChange={setSelectedAccountId}>
+          <Select value={selectedAccountId} onValueChange={setSelectedAccountId}>
             <SelectTrigger size="sm" className="h-9 text-xs">
               <SelectValue placeholder={managerLevels.length > 0 && !activeManager ? 'Select an MCC first' : 'Select ad account'} />
             </SelectTrigger>

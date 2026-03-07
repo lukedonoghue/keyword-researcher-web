@@ -60,6 +60,7 @@ export function Header() {
               width={120}
               height={28}
               className="h-7 w-auto dark:hidden"
+              style={{ width: 'auto', height: 'auto' }}
               priority
             />
             <Image
@@ -68,6 +69,7 @@ export function Header() {
               width={120}
               height={28}
               className="hidden h-7 w-auto dark:block"
+              style={{ width: 'auto', height: 'auto' }}
               priority
             />
             <span className="text-[10px] font-medium text-muted-foreground border border-border rounded px-1.5 py-0.5 leading-none">

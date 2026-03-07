@@ -21,12 +21,19 @@ export class OpenRouterService {
   private baseUrl: string;
   private model: string;
   private timeoutMs: number;
+  private maxAttempts: number;
 
-  constructor(apiKey: string, model: string = DEFAULT_OPENROUTER_MODEL, timeoutMs: number = 60000) {
+  constructor(
+    apiKey: string,
+    model: string = DEFAULT_OPENROUTER_MODEL,
+    timeoutMs: number = 60000,
+    maxAttempts: number = 3,
+  ) {
     this.apiKey = apiKey;
     this.model = model;
     this.baseUrl = 'https://openrouter.ai/api/v1';
     this.timeoutMs = timeoutMs;
+    this.maxAttempts = Math.max(1, maxAttempts);
   }
 
   isAvailable(): boolean {
@@ -45,13 +52,17 @@ export class OpenRouterService {
     this.timeoutMs = timeoutMs;
   }
 
+  setMaxAttempts(maxAttempts: number): void {
+    this.maxAttempts = Math.max(1, maxAttempts);
+  }
+
   private async sleep(ms: number): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   async chatCompletion(messages: ChatMessage[], jsonMode = false, temperature?: number): Promise<ChatCompletionResult> {
     let lastError: unknown;
-    const attempts = 3;
+    const attempts = this.maxAttempts;
 
     for (let attempt = 1; attempt <= attempts; attempt++) {
       try {

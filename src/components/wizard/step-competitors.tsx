@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { applyStrategyFilter, enrichSeedKeywordsWithSignals } from '@/lib/logic/strategy-filter';
 import { isCompetitorBrand, normalizeKeywordText } from '@/lib/logic/keyword-signals';
+import { filterOutSelfCompetitorNames, isSelfBrandName } from '@/lib/logic/brand-identity';
 import { X } from 'lucide-react';
 
 function dedupeNames(names: string[]): string[] {
@@ -29,13 +30,23 @@ function dedupeNames(names: string[]): string[] {
 
 export function StepCompetitors() {
   const { state, dispatch } = useWorkflow();
+  const identity = useMemo(() => ({
+    businessName: state.businessName,
+    targetDomain: state.targetDomain,
+    targetUrl: state.targetUrl,
+  }), [state.businessName, state.targetDomain, state.targetUrl]);
   const [draftCompetitors, setDraftCompetitors] = useState<string[]>(() => dedupeNames(state.competitorNames));
   const [manualCompetitor, setManualCompetitor] = useState('');
   const [competitorMode, setCompetitorMode] = useState(state.strategy.competitorCampaignMode);
 
+  const sanitizedCompetitors = useMemo(
+    () => dedupeNames(filterOutSelfCompetitorNames(draftCompetitors, identity)),
+    [draftCompetitors, identity],
+  );
+
   const competitorKeywordRows = useMemo(() => {
     return state.seedKeywords
-      .filter((keyword) => Boolean(isCompetitorBrand(keyword.text, draftCompetitors)))
+      .filter((keyword) => Boolean(isCompetitorBrand(keyword.text, sanitizedCompetitors)))
       .slice()
       .sort((left, right) => {
         if (right.volume !== left.volume) return right.volume - left.volume;
@@ -44,26 +55,30 @@ export function StepCompetitors() {
       .slice(0, 20)
       .map((keyword) => ({
         ...keyword,
-        competitor: isCompetitorBrand(keyword.text, draftCompetitors) ?? 'Competitor',
+        competitor: isCompetitorBrand(keyword.text, sanitizedCompetitors) ?? 'Competitor',
       }));
-  }, [draftCompetitors, state.seedKeywords]);
+  }, [sanitizedCompetitors, state.seedKeywords]);
 
   const competitorCoverage = useMemo(() => {
     const counts = new Map<string, number>();
     for (const keyword of state.seedKeywords) {
-      const competitor = isCompetitorBrand(keyword.text, draftCompetitors);
+      const competitor = isCompetitorBrand(keyword.text, sanitizedCompetitors);
       if (!competitor) continue;
       counts.set(competitor, (counts.get(competitor) ?? 0) + 1);
     }
-    return draftCompetitors.map((name) => ({
+    return sanitizedCompetitors.map((name) => ({
       name,
       keywordCount: counts.get(name) ?? 0,
     }));
-  }, [draftCompetitors, state.seedKeywords]);
+  }, [sanitizedCompetitors, state.seedKeywords]);
 
   const handleAddCompetitor = () => {
     const trimmed = manualCompetitor.trim();
     if (!trimmed) return;
+    if (isSelfBrandName(trimmed, identity)) {
+      setManualCompetitor('');
+      return;
+    }
     setDraftCompetitors((prev) => dedupeNames([...prev, trimmed]));
     setManualCompetitor('');
   };
@@ -73,7 +88,7 @@ export function StepCompetitors() {
   };
 
   const handleContinue = () => {
-    const nextCompetitors = dedupeNames(draftCompetitors);
+    const nextCompetitors = sanitizedCompetitors;
     const enriched = enrichSeedKeywordsWithSignals(state.seedKeywords);
     const { selected, suppressed } = applyStrategyFilter(enriched, state.strategy, nextCompetitors);
     const nextStrategy = {

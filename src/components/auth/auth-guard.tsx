@@ -13,7 +13,13 @@ export function AuthGuard({ children }: { children: ReactNode }) {
         <div className="rounded-xl border border-border bg-card/80 backdrop-blur p-6 shadow-sm">
           <div className="flex items-center gap-3 mb-5">
             <div className="relative h-6 w-24 opacity-75 animate-pulse">
-              <Image src="/grow-my-ads-logo.png" alt="Grow My Ads" fill className="object-contain" />
+              <Image
+                src="/grow-my-ads-logo.png"
+                alt="Grow My Ads"
+                fill
+                sizes="96px"
+                className="object-contain"
+              />
             </div>
             <span className="text-xs text-muted-foreground">Loading workspace...</span>
           </div>

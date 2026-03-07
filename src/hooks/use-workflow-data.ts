@@ -19,6 +19,7 @@ import { downloadResponseFile } from '@/lib/utils';
 import { mergeKeywordsWithGoogleAdsAuthority } from '@/lib/logic/keyword-merge';
 import { enrichSeedKeywordsWithSignals, applyStrategyFilter } from '@/lib/logic/strategy-filter';
 import { buildReviewNegativeKeywordLists, mergeReviewNegativeKeywordLists } from '@/lib/logic/negative-keywords';
+import { filterOutSelfCompetitorNames } from '@/lib/logic/brand-identity';
 
 type ErrorResponse = { error?: string };
 
@@ -232,6 +233,8 @@ export function useWorkflowData() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           targetUrl: state.targetUrl,
+          targetDomain: state.targetDomain,
+          businessName: state.businessName,
           services: state.selectedServices,
           location: geoOverrides?.geoDisplayName ?? state.geoDisplayName,
           openrouterApiKey,
@@ -244,9 +247,16 @@ export function useWorkflowData() {
           .filter((kw): kw is Required<Pick<CompetitorKeywordApi, 'text'>> & CompetitorKeywordApi => typeof kw.text === 'string' && kw.text.trim().length > 0)
           .map((kw) => kw.text.trim());
         const competitors = Array.isArray(competitorData.competitors) ? competitorData.competitors : [];
-        competitorNames = competitors
+        competitorNames = filterOutSelfCompetitorNames(
+          competitors
           .map((c) => c.name?.trim())
-          .filter((n): n is string => !!n);
+          .filter((n): n is string => !!n),
+          {
+            businessName: state.businessName,
+            targetDomain: state.targetDomain,
+            targetUrl: state.targetUrl,
+          },
+        );
       }
       dispatch({ type: 'SET_COMPETITOR_NAMES', names: competitorNames });
 
@@ -445,11 +455,24 @@ export function useWorkflowData() {
           openrouterModel,
           ...extra,
         };
-        const res = await fetch('/api/enhance', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        });
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 20000);
+        let res: Response;
+        try {
+          res = await fetch('/api/enhance', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+            signal: controller.signal,
+          });
+        } catch (error) {
+          if (error instanceof DOMException && error.name === 'AbortError') {
+            throw new Error(`AI ${phase} phase timed out`);
+          }
+          throw error;
+        } finally {
+          clearTimeout(timeout);
+        }
         if (!res.ok) throw new Error(await getApiErrorMessage(res, `Failed at ${phase} phase`));
         const data = await res.json() as EnhancePhaseResponse;
         results.push(...data.keywords);
@@ -476,11 +499,24 @@ export function useWorkflowData() {
 
       // Phase 4: Merge & filter (fast, no AI)
       onPhase?.('merge');
-      const mergeRes = await fetch('/api/enhance', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phase: 'merge', keywords: mergedAiKeywords, strategy: state.strategy }),
-      });
+      const mergeController = new AbortController();
+      const mergeTimeout = setTimeout(() => mergeController.abort(), 10000);
+      let mergeRes: Response;
+      try {
+        mergeRes = await fetch('/api/enhance', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phase: 'merge', keywords: mergedAiKeywords, strategy: state.strategy }),
+          signal: mergeController.signal,
+        });
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') {
+          throw new Error('Keyword merge timed out');
+        }
+        throw error;
+      } finally {
+        clearTimeout(mergeTimeout);
+      }
       if (!mergeRes.ok) throw new Error(await getApiErrorMessage(mergeRes, 'Failed to merge keywords'));
       const mergeData = await mergeRes.json() as EnhanceMergeResponse;
 
@@ -497,20 +533,28 @@ export function useWorkflowData() {
       let reviewLists = generatedReviewLists;
       if (openrouterApiKey && mergeData.suppressed.length > 0) {
         try {
-          const negativesRes = await fetch('/api/enhance', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              phase: 'negatives',
-              keywords: mergeData.suppressed,
-              services: state.selectedServices,
-              targetDomain: state.targetDomain,
-              businessName: state.businessName,
-              businessDescription: state.businessDescription,
-              openrouterApiKey,
-              openrouterModel,
-            }),
-          });
+          const negativesController = new AbortController();
+          const negativesTimeout = setTimeout(() => negativesController.abort(), 15000);
+          let negativesRes: Response;
+          try {
+            negativesRes = await fetch('/api/enhance', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                phase: 'negatives',
+                keywords: mergeData.suppressed,
+                services: state.selectedServices,
+                targetDomain: state.targetDomain,
+                businessName: state.businessName,
+                businessDescription: state.businessDescription,
+                openrouterApiKey,
+                openrouterModel,
+              }),
+              signal: negativesController.signal,
+            });
+          } finally {
+            clearTimeout(negativesTimeout);
+          }
 
           if (negativesRes.ok) {
             const negativesData = await negativesRes.json() as EnhanceNegativesResponse;
