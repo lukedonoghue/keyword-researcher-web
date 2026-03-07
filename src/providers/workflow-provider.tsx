@@ -134,6 +134,21 @@ const initialState: WorkflowState = {
 
 const WORKFLOW_STORAGE_KEY = 'keyword-researcher:workflow-state';
 const WORKFLOW_STORAGE_VERSION = 1;
+const WORKFLOW_RESEARCH_BACKUP_KEY = 'keyword-researcher:research-backup';
+const WORKFLOW_RESEARCH_BACKUP_VERSION = 1;
+
+type WorkflowResearchBackup = {
+  version: number;
+  targetUrl: string;
+  geoDisplayName: string;
+  selectedServices: string[];
+  competitorNames: string[];
+  seedKeywords: SeedKeyword[];
+  selectedKeywords: SeedKeyword[];
+  suppressedKeywords: SuppressedKeyword[];
+  enhancedKeywords: SeedKeyword[];
+  enhancedSuppressed: SuppressedKeyword[];
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
@@ -264,9 +279,63 @@ function persistWorkflowState(state: WorkflowState) {
   );
 }
 
+function createResearchBackup(state: WorkflowState): WorkflowResearchBackup | null {
+  const hasResearchState =
+    state.seedKeywords.length > 0 ||
+    state.selectedKeywords.length > 0 ||
+    state.suppressedKeywords.length > 0 ||
+    state.enhancedKeywords.length > 0 ||
+    state.enhancedSuppressed.length > 0;
+
+  if (!hasResearchState) {
+    return null;
+  }
+
+  return {
+    version: WORKFLOW_RESEARCH_BACKUP_VERSION,
+    targetUrl: state.targetUrl,
+    geoDisplayName: state.geoDisplayName,
+    selectedServices: state.selectedServices,
+    competitorNames: state.competitorNames,
+    seedKeywords: state.seedKeywords,
+    selectedKeywords: state.selectedKeywords,
+    suppressedKeywords: state.suppressedKeywords,
+    enhancedKeywords: state.enhancedKeywords,
+    enhancedSuppressed: state.enhancedSuppressed,
+  };
+}
+
+function persistResearchBackup(state: WorkflowState) {
+  if (typeof window === 'undefined') return;
+  const backup = createResearchBackup(state);
+  if (!backup) return;
+  window.localStorage.setItem(WORKFLOW_RESEARCH_BACKUP_KEY, JSON.stringify(backup));
+}
+
+function loadPersistedResearchBackup(): WorkflowResearchBackup | null {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+
+  try {
+    const raw = window.localStorage.getItem(WORKFLOW_RESEARCH_BACKUP_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as WorkflowResearchBackup;
+    if (!parsed || parsed.version !== WORKFLOW_RESEARCH_BACKUP_VERSION) {
+      window.localStorage.removeItem(WORKFLOW_RESEARCH_BACKUP_KEY);
+      return null;
+    }
+    return parsed;
+  } catch {
+    window.localStorage.removeItem(WORKFLOW_RESEARCH_BACKUP_KEY);
+    return null;
+  }
+}
+
 function clearPersistedWorkflowState() {
   if (typeof window === 'undefined') return;
   window.localStorage.removeItem(WORKFLOW_STORAGE_KEY);
+  window.localStorage.removeItem(WORKFLOW_RESEARCH_BACKUP_KEY);
 }
 
 function createDownstreamResearchReset() {
@@ -305,6 +374,7 @@ export type WorkflowAction =
   | { type: 'SET_REVIEW_NEGATIVE_KEYWORD_LISTS'; lists: NegativeKeywordList[] }
   | { type: 'SET_NEGATIVE_KEYWORDS'; negativeKeywords: NegativeKeyword[] }
   | { type: 'SET_NEGATIVE_KEYWORD_LISTS'; lists: NegativeKeywordList[] }
+  | { type: 'RESTORE_RESEARCH_STATE'; backup: WorkflowResearchBackup }
   | { type: 'SET_PROCESSING'; isProcessing: boolean }
   | { type: 'SET_ERROR'; error: string | null }
   | { type: 'RESET' };
@@ -445,6 +515,16 @@ function workflowReducer(state: WorkflowState, action: WorkflowAction): Workflow
       return { ...state, negativeKeywords: action.negativeKeywords };
     case 'SET_NEGATIVE_KEYWORD_LISTS':
       return { ...state, negativeKeywordLists: action.lists };
+    case 'RESTORE_RESEARCH_STATE':
+      return {
+        ...state,
+        competitorNames: normalizeCompetitorNames(action.backup.competitorNames),
+        seedKeywords: action.backup.seedKeywords,
+        selectedKeywords: action.backup.selectedKeywords,
+        suppressedKeywords: action.backup.suppressedKeywords,
+        enhancedKeywords: action.backup.enhancedKeywords,
+        enhancedSuppressed: action.backup.enhancedSuppressed,
+      };
     case 'SET_PROCESSING':
       return { ...state, isProcessing: action.isProcessing };
     case 'SET_ERROR':
@@ -466,6 +546,10 @@ const WorkflowContext = createContext<{
 export function WorkflowProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(workflowReducer, initialState);
   const [hydrated, setHydrated] = useState(false);
+  const selectedServicesKey = useMemo(
+    () => [...state.selectedServices].sort().join('|'),
+    [state.selectedServices],
+  );
 
   useEffect(() => {
     dispatch({ type: 'HYDRATE', state: loadPersistedWorkflowState() });
@@ -478,7 +562,39 @@ export function WorkflowProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!hydrated) return;
     persistWorkflowState(state);
+    persistResearchBackup(state);
   }, [state, hydrated]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    const backup = loadPersistedResearchBackup();
+    if (!backup) return;
+    const hasResearchState =
+      state.seedKeywords.length > 0 ||
+      state.selectedKeywords.length > 0 ||
+      state.suppressedKeywords.length > 0 ||
+      state.enhancedKeywords.length > 0 ||
+      state.enhancedSuppressed.length > 0;
+    if (hasResearchState) return;
+    if (!['competitors', 'enhance', 'review', 'campaign'].includes(state.currentStep)) return;
+    if (backup.targetUrl !== state.targetUrl) return;
+    if (backup.geoDisplayName !== state.geoDisplayName) return;
+    const backupServicesKey = [...backup.selectedServices].sort().join('|');
+    if (backupServicesKey !== selectedServicesKey) return;
+    dispatch({ type: 'RESTORE_RESEARCH_STATE', backup });
+  }, [
+    dispatch,
+    hydrated,
+    state.currentStep,
+    state.targetUrl,
+    state.geoDisplayName,
+    selectedServicesKey,
+    state.seedKeywords.length,
+    state.selectedKeywords.length,
+    state.suppressedKeywords.length,
+    state.enhancedKeywords.length,
+    state.enhancedSuppressed.length,
+  ]);
 
   const restart = useCallback(() => {
     clearPersistedWorkflowState();

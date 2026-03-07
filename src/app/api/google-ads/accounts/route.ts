@@ -1,26 +1,60 @@
 import { NextResponse } from 'next/server';
-import { requireGoogleAuth, getGoogleAdsCredentials } from '@/lib/auth/middleware';
+import { requireGoogleAuth } from '@/lib/auth/middleware';
 import { GoogleAdsService } from '@/lib/services/google-ads';
 import type { GoogleAdsAccountSelection } from '@/lib/types/google-ads';
+import type { GoogleAdsAccountNode } from '@/lib/types/google-ads';
 import { getErrorMessage } from '@/lib/utils';
+
+function findNodeById(nodes: GoogleAdsAccountNode[], customerId: string): GoogleAdsAccountNode | null {
+  for (const node of nodes) {
+    if (node.customerId === customerId) return node;
+    const nested = findNodeById(node.children, customerId);
+    if (nested) return nested;
+  }
+  return null;
+}
+
+function isSelectableLeafAccount(node: GoogleAdsAccountNode | null): node is GoogleAdsAccountNode {
+  if (!node || node.isManager) return false;
+  if (!node.status) return true;
+  return node.status === '2' || node.status.toUpperCase() === 'ENABLED';
+}
 
 export async function GET() {
   const auth = await requireGoogleAuth();
   if (auth.error) return auth.error;
 
   try {
-    const credentials = getGoogleAdsCredentials(auth.session);
-    // For listing accounts, we need a manager account or the user's own ID
-    // Try with a placeholder - the API will return accessible accounts
+    const developerToken = process.env.GOOGLE_ADS_DEVELOPER_TOKEN;
+    const clientId = process.env.GOOGLE_ADS_ORIG_CLIENT_ID || process.env.GOOGLE_ADS_CLIENT_ID;
+    const clientSecret = process.env.GOOGLE_ADS_ORIG_CLIENT_SECRET || process.env.GOOGLE_ADS_CLIENT_SECRET;
+    if (!developerToken || !clientId || !clientSecret || !auth.session.refreshToken) {
+      throw new Error('Google Ads credentials are not configured');
+    }
+
     const service = new GoogleAdsService({
-      ...credentials,
-      customerId: credentials.customerId || '0',
+      developerToken,
+      clientId,
+      clientSecret,
+      refreshToken: auth.session.refreshToken,
+      customerId: auth.session.customerId || '0',
+      loginCustomerId: auth.session.loginCustomerId || undefined,
     });
     const hierarchy = await service.listAccountHierarchy();
+    const selectedNode = auth.session.customerId ? findNodeById(hierarchy, auth.session.customerId) : null;
+    const selectionIsValid = isSelectableLeafAccount(selectedNode);
+
+    if (auth.session.customerId && !selectionIsValid) {
+      auth.session.customerId = undefined;
+      auth.session.loginCustomerId = undefined;
+      auth.session.selectedAccountName = undefined;
+      await auth.session.save();
+    }
+
     const selection: GoogleAdsAccountSelection = {
-      customerId: auth.session.customerId || null,
-      loginCustomerId: auth.session.loginCustomerId || null,
-      descriptiveName: auth.session.selectedAccountName || null,
+      customerId: selectionIsValid ? auth.session.customerId || null : null,
+      loginCustomerId: selectionIsValid ? auth.session.loginCustomerId || null : null,
+      descriptiveName: selectionIsValid ? auth.session.selectedAccountName || null : null,
     };
     return NextResponse.json({ hierarchy, selection });
   } catch (error: unknown) {
@@ -45,6 +79,38 @@ export async function POST(request: Request) {
   const normalizedLoginCustomerId = String(loginCustomerId || '').replace(/\D/g, '');
   if (!normalizedCustomerId) {
     return NextResponse.json({ error: 'Customer ID is required' }, { status: 400 });
+  }
+
+  try {
+    const developerToken = process.env.GOOGLE_ADS_DEVELOPER_TOKEN;
+    const clientId = process.env.GOOGLE_ADS_ORIG_CLIENT_ID || process.env.GOOGLE_ADS_CLIENT_ID;
+    const clientSecret = process.env.GOOGLE_ADS_ORIG_CLIENT_SECRET || process.env.GOOGLE_ADS_CLIENT_SECRET;
+    if (!developerToken || !clientId || !clientSecret || !auth.session.refreshToken) {
+      throw new Error('Google Ads credentials are not configured');
+    }
+
+    const service = new GoogleAdsService({
+      developerToken,
+      clientId,
+      clientSecret,
+      refreshToken: auth.session.refreshToken,
+      customerId: normalizedLoginCustomerId || normalizedCustomerId,
+      loginCustomerId: normalizedLoginCustomerId || undefined,
+    });
+    const hierarchy = await service.listAccountHierarchy();
+    const selectedNode = findNodeById(hierarchy, normalizedCustomerId);
+
+    if (!isSelectableLeafAccount(selectedNode)) {
+      return NextResponse.json(
+        { error: 'Select an active direct Google Ads account. Manager or deactivated accounts cannot be used for keyword research or import.' },
+        { status: 400 },
+      );
+    }
+  } catch (error: unknown) {
+    return NextResponse.json(
+      { error: getErrorMessage(error, 'Failed to validate selected Google Ads account') },
+      { status: 500 },
+    );
   }
 
   auth.session.customerId = normalizedCustomerId;

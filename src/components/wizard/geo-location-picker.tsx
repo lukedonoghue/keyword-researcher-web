@@ -236,6 +236,22 @@ export function GeoLocationPicker({
     return 'US';
   }, [manualCountry, detectedCountryCode, initialCountryCode]);
 
+  const selectedStateLocations = useMemo(
+    () => selectedLocations.filter((location) => isStateLikeTargetType(location.targetType)),
+    [selectedLocations],
+  );
+  const selectedCityLocations = useMemo(
+    () => selectedLocations.filter((location) => !isStateLikeTargetType(location.targetType) && isCityLikeTargetType(location.targetType)),
+    [selectedLocations],
+  );
+  const selectedOtherLocations = useMemo(
+    () =>
+      selectedLocations.filter(
+        (location) => !isStateLikeTargetType(location.targetType) && !isCityLikeTargetType(location.targetType),
+      ),
+    [selectedLocations],
+  );
+
   const searchLocations = useCallback(async (query: string, countryCode: string) => {
     if (!query.trim()) {
       setSearchResults([]);
@@ -433,6 +449,10 @@ export function GeoLocationPicker({
           if (!seen.has(result.id)) {
             seen.add(result.id);
             results.push(result);
+            setSelectedLocations((prev) => {
+              if (prev.some((location) => location.id === result.id)) return prev;
+              return [...prev, result];
+            });
           }
           matchedCount++;
         } else {
@@ -443,10 +463,6 @@ export function GeoLocationPicker({
       }
 
       if (cancelled) return;
-
-      if (results.length > 0) {
-        setSelectedLocations(results);
-      }
       setAutoPopulating(false);
       setAutoPopulateSummary({ matched: matchedCount, total: allNames.length });
       autoPopulateKeyRef.current = autoPopulateKey;
@@ -566,6 +582,11 @@ export function GeoLocationPicker({
                     ))}
                   </div>
                 )}
+                {detectedServiceArea.states.length > 0 && (
+                  <p className="text-[11px] text-muted-foreground">
+                    State-level targets are highlighted separately so you can keep or remove them independently from city targets.
+                  </p>
+                )}
               </div>
             )}
 
@@ -671,22 +692,68 @@ export function GeoLocationPicker({
 
           {selectedLocations.length > 0 && (
             <div className="mt-2 space-y-1.5">
-              <div className="flex flex-wrap gap-1">
-                {selectedLocations.map((loc) => (
-                  <Badge key={loc.id} variant="secondary" className="text-[11px] px-2 py-0.5 gap-1">
-                    {loc.name}
-                    <button
-                      className="ml-0.5 hover:text-destructive"
-                      onClick={() => removeLocation(loc.id)}
-                      aria-label={`Remove ${loc.name}`}
-                    >
-                      &times;
-                    </button>
-                  </Badge>
-                ))}
-              </div>
+              {selectedCityLocations.length > 0 && (
+                <div className="space-y-1">
+                  <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Cities</p>
+                  <div className="flex flex-wrap gap-1">
+                    {selectedCityLocations.map((loc) => (
+                      <Badge key={loc.id} variant="secondary" className="text-[11px] px-2 py-0.5 gap-1">
+                        {loc.name}
+                        <button
+                          className="ml-0.5 hover:text-destructive"
+                          onClick={() => removeLocation(loc.id)}
+                          aria-label={`Remove ${loc.name}`}
+                        >
+                          &times;
+                        </button>
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {selectedStateLocations.length > 0 && (
+                <div className="space-y-1">
+                  <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">States</p>
+                  <div className="flex flex-wrap gap-1">
+                    {selectedStateLocations.map((loc) => (
+                      <Badge key={loc.id} variant="secondary" className="text-[11px] px-2 py-0.5 gap-1">
+                        {loc.name}
+                        <button
+                          className="ml-0.5 hover:text-destructive"
+                          onClick={() => removeLocation(loc.id)}
+                          aria-label={`Remove ${loc.name}`}
+                        >
+                          &times;
+                        </button>
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {selectedOtherLocations.length > 0 && (
+                <div className="space-y-1">
+                  <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Other Targets</p>
+                  <div className="flex flex-wrap gap-1">
+                    {selectedOtherLocations.map((loc) => (
+                      <Badge key={loc.id} variant="secondary" className="text-[11px] px-2 py-0.5 gap-1">
+                        {loc.name}
+                        <button
+                          className="ml-0.5 hover:text-destructive"
+                          onClick={() => removeLocation(loc.id)}
+                          aria-label={`Remove ${loc.name}`}
+                        >
+                          &times;
+                        </button>
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              )}
               <p className="text-[10px] text-muted-foreground">
-                Using {selectedLocations.length} specific location{selectedLocations.length !== 1 ? 's' : ''} for keyword research
+                Using {selectedCityLocations.length} city target{selectedCityLocations.length !== 1 ? 's' : ''}
+                {selectedStateLocations.length > 0 ? ` and ${selectedStateLocations.length} state target${selectedStateLocations.length !== 1 ? 's' : ''}` : ''}
+                {selectedOtherLocations.length > 0 ? ` plus ${selectedOtherLocations.length} other target${selectedOtherLocations.length !== 1 ? 's' : ''}` : ''}
+                {' '}for keyword research
               </p>
             </div>
           )}
@@ -702,7 +769,13 @@ export function GeoLocationPicker({
         <Button variant="outline" size="sm" className="h-8" onClick={onCancel}>
           {cancelLabel}
         </Button>
-        <Button variant="brand" size="sm" className="h-8" onClick={handleConfirm}>
+        <Button
+          variant="brand"
+          size="sm"
+          className="h-8"
+          onClick={handleConfirm}
+          disabled={autoPopulating && selectedLocations.length === 0}
+        >
           {confirmLabel}
         </Button>
       </div>

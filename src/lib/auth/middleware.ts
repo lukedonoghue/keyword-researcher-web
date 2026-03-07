@@ -20,12 +20,16 @@ export async function requireGoogleAuth(): Promise<
 }
 
 export function getGoogleAdsCredentials(session: SessionData) {
+  if (!session.customerId) {
+    throw new Error('No Google Ads publish target selected');
+  }
+
   return {
     developerToken: process.env.GOOGLE_ADS_DEVELOPER_TOKEN!,
     clientId: process.env.GOOGLE_ADS_ORIG_CLIENT_ID || process.env.GOOGLE_ADS_CLIENT_ID!,
     clientSecret: process.env.GOOGLE_ADS_ORIG_CLIENT_SECRET || process.env.GOOGLE_ADS_CLIENT_SECRET!,
     refreshToken: session.refreshToken!,
     customerId: session.customerId!,
-    loginCustomerId: session.loginCustomerId || process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID,
+    loginCustomerId: session.loginCustomerId || undefined,
   };
 }

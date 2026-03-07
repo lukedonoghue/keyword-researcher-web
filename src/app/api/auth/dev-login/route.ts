@@ -38,8 +38,6 @@ export async function GET(request: NextRequest) {
     const session = await getSession();
     session.accessToken = tokens.access_token;
     session.refreshToken = refreshToken;
-    session.customerId = process.env.GOOGLE_ADS_CUSTOMER_ID || '';
-    session.loginCustomerId = process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID || '';
     session.expiresAt = Date.now() + tokens.expires_in * 1000;
     await session.save();
 

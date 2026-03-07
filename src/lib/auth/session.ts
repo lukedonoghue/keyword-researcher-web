@@ -74,12 +74,6 @@ export async function ensureDevSession(session: IronSession<SessionData>) {
   }
 
   session.refreshToken = refreshToken;
-  if (!session.customerId && process.env.GOOGLE_ADS_CUSTOMER_ID) {
-    session.customerId = process.env.GOOGLE_ADS_CUSTOMER_ID;
-  }
-  if (!session.loginCustomerId && process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID) {
-    session.loginCustomerId = process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID;
-  }
   if (!session.expiresAt) {
     session.expiresAt = Date.now() + 24 * 60 * 60 * 1000;
   }

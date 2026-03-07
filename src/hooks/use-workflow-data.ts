@@ -373,6 +373,7 @@ export function useWorkflowData() {
 
       const googleKeywords: SeedKeyword[] = [];
       const cpcDebugEntries: ServiceCpcDebug[] = [];
+      const googleAdsErrors: string[] = [];
       const effectiveGeoTargets = geoOverrides?.geoTargets ?? state.geoTargets;
       const effectiveGeoTargetId = geoOverrides?.geoTargetId ?? state.geoTargetId;
       const geoTargetIds = effectiveGeoTargets.length > 0
@@ -444,9 +445,12 @@ export function useWorkflowData() {
             }
 
             googleKeywords.push(...parsed);
+          } else {
+            googleAdsErrors.push(await getApiErrorMessage(googleRes, `Google Ads keyword ideas failed for ${service}`));
           }
         } catch (err) {
           console.warn(`[research] GKP call error for "${service}":`, err);
+          googleAdsErrors.push(getErrorMessage(err, `Google Ads keyword ideas failed for ${service}`));
         }
       }
 
@@ -497,14 +501,21 @@ export function useWorkflowData() {
             }
 
             googleKeywords.push(...parsed);
+          } else {
+            googleAdsErrors.push(await getApiErrorMessage(googleRes, `Google Ads competitor keyword ideas failed for batch ${batchIndex + 1}`));
           }
         } catch (err) {
           console.warn(`[research] GKP competitor batch ${batchIndex + 1} error:`, err);
+          googleAdsErrors.push(getErrorMessage(err, `Google Ads competitor keyword ideas failed for batch ${batchIndex + 1}`));
         }
       }
 
       // Only Google Ads data in the final results — no Perplexity or fabricated location variants
       const allKeywords = [...googleKeywords];
+      if (allKeywords.length === 0) {
+        const firstGoogleError = googleAdsErrors.find((message) => typeof message === 'string' && message.trim().length > 0);
+        throw new Error(firstGoogleError || 'Google Ads did not return any keyword ideas. Select an active direct account or broaden the current seeds and geo targets.');
+      }
       dispatch({ type: 'SET_SEED_KEYWORDS', keywords: allKeywords });
       return { keywords: allKeywords, competitorNames, cpcDebug: cpcDebugEntries };
     } catch (err: unknown) {

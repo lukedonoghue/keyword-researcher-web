@@ -8,9 +8,25 @@ export function cn(...inputs: ClassValue[]) {
 export function getErrorMessage(error: unknown, fallback: string): string {
   if (error instanceof Error && error.message.trim()) return error.message
   if (typeof error === "string" && error.trim()) return error
+  if (error && typeof error === "object" && "errors" in error) {
+    const errors = (error as { errors?: unknown }).errors
+    if (Array.isArray(errors)) {
+      const firstMessage = errors.find((item) => {
+        if (!item || typeof item !== "object") return false
+        return typeof (item as { message?: unknown }).message === "string" && (item as { message: string }).message.trim().length > 0
+      }) as { message?: string } | undefined
+      if (typeof firstMessage?.message === "string" && firstMessage.message.trim()) {
+        return firstMessage.message
+      }
+    }
+  }
   if (error && typeof error === "object" && "message" in error) {
     const message = (error as { message?: unknown }).message
     if (typeof message === "string" && message.trim()) return message
+  }
+  if (error && typeof error === "object" && "details" in error) {
+    const details = (error as { details?: unknown }).details
+    if (typeof details === "string" && details.trim()) return details
   }
   return fallback
 }
